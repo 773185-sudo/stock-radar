@@ -4,6 +4,7 @@ import yfinance as yf
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import datetime
+import time  # 🌟 新增：用來控制 API 請求頻率，防止被封鎖
 from FinMind.data import DataLoader
 
 # ==========================================
@@ -17,7 +18,7 @@ st.set_page_config(
 )
 
 st.title("📡 台股 100% 純金真籌碼歷史防空雷達 🚀")
-st.write("拒絕任何模擬與死資料。所有數據皆由 Yahoo Finance 與 FinMind 官方資料庫實時運算產出！")
+st.write("已實裝【防封鎖節流引擎】，穩定提取 FinMind 實時官方數據！")
 st.markdown("---")
 
 # ==========================================
@@ -29,15 +30,15 @@ with col_in1:
 with col_in2:
     target_date = st.date_input("📅 請選擇欲檢視的交易日期：", value=datetime.date.today())
 
-actual_date_finmind = target_date.strftime("%Y-%m-%d") # YYYY-MM-DD
+actual_date_finmind = target_date.strftime("%Y-%m-%d")
 
 if st.button("🔥 啟動跨時空全景大數據補完"):
-    with st.spinner(f"📡 雷達正在向官方與 FinMind 資料庫調取 {actual_date_finmind} 的實時數據..."):
+    with st.spinner(f"📡 雷達正在向官方與 FinMind 資料庫調取 {actual_date_finmind} 的實時數據 (為防阻擋，約需 3-5 秒)..."):
         
         api_loader = DataLoader()
         
         # ==========================================
-        # 3. 數據模組一：智慧識別上市櫃並下載K線能 (Yahoo Finance)
+        # 3. K線與上市櫃識別 (Yahoo Finance)
         # ==========================================
         start_date = target_date - datetime.timedelta(days=90)
         end_date = target_date + datetime.timedelta(days=1)
@@ -63,12 +64,11 @@ if st.button("🔥 啟動跨時空全景大數據補完"):
         df_k['5VolMA'] = df_k['Volume'].rolling(window=5).mean()
         
         latest_close = float(df_k['Close'].iloc[-1])
-        latest_vol = int(df_k['Volume'].iloc[-1])
         actual_data_date = df_k.index[-1].strftime("%Y/%m/%d")
         actual_date_finmind = df_k.index[-1].strftime("%Y-%m-%d")
 
         # ==========================================
-        # 🌟 數據模組二：100% 真實【三大法人買賣超】(FinMind)
+        # 🌟 模組二：三大法人買賣超 (FinMind)
         # ==========================================
         foreign_shares = 0
         trust_shares = 0
@@ -80,7 +80,6 @@ if st.button("🔥 啟動跨時空全景大數據補完"):
                 start_date=actual_date_finmind,
                 end_date=actual_date_finmind
             )
-            
             if not df_institutional.empty:
                 for _, row_inst in df_institutional.iterrows():
                     name = row_inst['name']
@@ -92,20 +91,18 @@ if st.button("🔥 啟動跨時空全景大數據補完"):
                     elif "自營商" in name:
                         dealer_shares += buy_sell_lots
                         
-                # 有資料時的渲染邏輯
                 foreign_txt = f"🔺 淨買超 {foreign_shares:,} 張" if foreign_shares > 0 else (f"❌ 淨賣超 {abs(foreign_shares):,} 張" if foreign_shares < 0 else "⚪ 淨買賣 0 張")
                 trust_txt = f"🔺 淨買超 {trust_shares:,} 張" if trust_shares > 0 else (f"❌ 淨賣超 {abs(trust_shares):,} 張" if trust_shares < 0 else "⚪ 淨買賣 0 張")
                 dealer_txt = f"🔺 淨買超 {dealer_shares:,} 張" if dealer_shares > 0 else (f"❌ 淨賣超 {abs(dealer_shares):,} 張" if dealer_shares < 0 else "⚪ 淨買賣 0 張")
             else:
-                # 抓不到資料時的防錯提示
-                foreign_txt = "⏳ 官方盤後數據尚未更新"
-                trust_txt = "⏳ 官方盤後數據尚未更新"
-                dealer_txt = "⏳ 官方盤後數據尚未更新"
-        except Exception as e:
-            foreign_txt = trust_txt = dealer_txt = "⚠️ 讀取異常"
+                foreign_txt = trust_txt = dealer_txt = "⏳ 官方當日未公告或無交易"
+        except:
+            foreign_txt = trust_txt = dealer_txt = "⚠️ API 阻擋，請稍後再試"
+
+        time.sleep(0.8) # 🛑 節流閥：防止連續請求被 FinMind 封鎖
 
         # ==========================================
-        # 🌟 數據模組三：100% 安全模糊比對【融資、融券、借券賣出】(FinMind)
+        # 🌟 模組三：融資、融券、借券賣出 (FinMind)
         # ==========================================
         real_margin_balance = "官方當日未公告"
         real_margin_change = "0 張"
@@ -119,19 +116,19 @@ if st.button("🔥 啟動跨時空全景大數據補完"):
                 start_date=actual_date_finmind,
                 end_date=actual_date_finmind
             )
-            
             if not df_margin.empty:
                 cols = df_margin.columns.tolist()
                 
-                m_bal_col = next((c for c in cols if 'MarginPurchase' in c and ('Balance' in c or 'Limit' in c)), '')
-                m_buy_col = next((c for c in cols if 'MarginPurchaseBuy' in c or 'PurchaseValue' in c), '')
+                # 🌟 嚴格修正：只抓取包含 Balance (餘額) 的真實數據，排除 Limit (限額)
+                m_bal_col = next((c for c in cols if 'MarginPurchase' in c and 'Balance' in c), '')
+                m_buy_col = next((c for c in cols if 'MarginPurchaseBuy' in c), '')
                 m_sell_col = next((c for c in cols if 'MarginPurchaseSell' in c), '')
                 
-                s_bal_col = next((c for c in cols if 'ShortSale' in c and ('Balance' in c or 'Limit' in c)), '')
+                s_bal_col = next((c for c in cols if 'ShortSale' in c and 'Balance' in c), '')
                 s_buy_col = next((c for c in cols if 'ShortSaleBuy' in c), '')
                 s_sell_col = next((c for c in cols if 'ShortSaleSell' in c), '')
                 
-                sbl_col = next((c for c in cols if 'SBL' in c), '')
+                sbl_col = next((c for c in cols if 'SBL' in c and 'Balance' in c), '')
                 
                 if m_bal_col:
                     real_margin_balance = f"{int(df_margin[m_bal_col].iloc[-1]):,} 張"
@@ -147,11 +144,13 @@ if st.button("🔥 啟動跨時空全景大數據補完"):
                     
                 if sbl_col:
                     real_borrow_sell = f"{int(df_margin[sbl_col].iloc[-1]):,} 張"
-        except Exception as e:
+        except:
             pass
 
+        time.sleep(0.8) # 🛑 節流閥
+
         # ==========================================
-        # 🌟 數據模組四：100% 真實【當沖比例】(FinMind)
+        # 🌟 模組四：當沖比例 (FinMind)
         # ==========================================
         real_day_trade_rate = "官方當日未公告"
         try:
@@ -167,15 +166,17 @@ if st.button("🔥 啟動跨時空全景大數據補完"):
                 
                 if v_col and dt_col and float(df_day_trade[v_col].iloc[-1]) > 0:
                     dt_ratio = float(df_day_trade[dt_col].iloc[-1]) / float(df_day_trade[v_col].iloc[-1]) * 100
-                    real_day_trade_rate = f"{dt_ratio:.1f} %"
-        except Exception as e:
+                    real_day_trade_rate = f"⚡ {dt_ratio:.1f} %"
+        except:
             pass
 
+        time.sleep(0.8) # 🛑 節流閥
+
         # ==========================================
-        # 🌟 數據模組五：100% 真實【Top 3 券商分點對決】(FinMind)
+        # 🌟 模組五：Top 3 券商分點對決 (FinMind)
         # ==========================================
-        buy_df_show = pd.DataFrame(columns=["買超券商分點", "買賣超張數", "當日收盤價"])
-        sell_df_show = pd.DataFrame(columns=["賣超券商分點", "買賣超張數", "當日收盤價", "券商屬性標籤"])
+        buy_df_show = pd.DataFrame()
+        sell_df_show = pd.DataFrame()
         
         try:
             df_broker = api_loader.taiwan_stock_broker_holders_by_id(
@@ -183,7 +184,6 @@ if st.button("🔥 啟動跨時空全景大數據補完"):
                 start_date=actual_date_finmind,
                 end_date=actual_date_finmind
             )
-            
             if not df_broker.empty:
                 b_cols = df_broker.columns.tolist()
                 buy_idx = next((c for c in b_cols if 'BuyShare' in c or 'buy_share' in c), '')
@@ -214,7 +214,7 @@ if st.button("🔥 啟動跨時空全景大數據補完"):
                             elif any(local in b_name for local in ["凱基", "富邦", "元大", "永豐金", "統一"]):
                                 tags.append("⚠️ 本土大型券商")
                             else:
-                                tags.append("📡 分點實時監控中")
+                                tags.append("📡 分點實時監控")
                                 
                         sell_df_show = pd.DataFrame({
                             "賣超券商分點": sell_brokers,
@@ -222,7 +222,7 @@ if st.button("🔥 啟動跨時空全景大數據補完"):
                             "當日收盤價": [f"{latest_close:.2f} 元" for _ in range(len(df_top_sell))],
                             "券商屬性標籤": tags
                         })
-        except Exception as e:
+        except:
             pass
 
         # ==========================================
@@ -230,31 +230,21 @@ if st.button("🔥 啟動跨時空全景大數據補完"):
         # ==========================================
         st.success(f"✅ 【100% 全真實數據解鎖】 [{market_type_name}] 代號：{stock_input} | 交易日期：{actual_data_date} (收盤價: {latest_close:.2f} 元)")
         
-        # K線與成交量圖表
+        # K線圖表
         st.subheader(f"📈 歷史動態日 K 線與成交量均線圖表 ({actual_data_date} 之前)")
-        fig = make_subplots(
-            rows=2, cols=1, shared_xaxes=True, 
-            vertical_spacing=0.12, 
-            subplot_titles=(f'日K線軌跡 (終點日期: {actual_data_date})', '成交量能檢視 (紫線: 5日均量)'),
-            row_width=[0.35, 0.65]
-        )
-        
-        fig.add_trace(go.Candlestick(
-            x=df_k.index, open=df_k['Open'], high=df_k['High'], low=df_k['Low'], close=df_k['Close'], name="日K線"
-        ), row=1, col=1)
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.12, row_width=[0.35, 0.65])
+        fig.add_trace(go.Candlestick(x=df_k.index, open=df_k['Open'], high=df_k['High'], low=df_k['Low'], close=df_k['Close'], name="日K線"), row=1, col=1)
         fig.add_trace(go.Scatter(x=df_k.index, y=df_k['5MA'], line=dict(color='#2980B9', width=1.5), name="5MA"), row=1, col=1)
         fig.add_trace(go.Scatter(x=df_k.index, y=df_k['20MA'], line=dict(color='#E67E22', width=2), name="20MA(月線)"), row=1, col=1)
-        
         v_colors = ['#E74C3C' if cl >= op else '#2ECC71' for op, cl in zip(df_k['Open'], df_k['Close'])]
         fig.add_trace(go.Bar(x=df_k.index, y=df_k['Volume'], marker_color=v_colors, name="成交量"), row=2, col=1)
         fig.add_trace(go.Scatter(x=df_k.index, y=df_k['5VolMA'], line=dict(color='#8E44AD', width=1.5), name="5日均量"), row=2, col=1)
-        
         fig.update_layout(xaxis_rangeslider_visible=False, height=520, margin=dict(l=10, r=10, t=30, b=10))
         st.plotly_chart(fig, use_container_width=True)
         
         st.write("---")
         
-        # 三大法人明細
+        # 三大法人
         st.subheader(f"🕵️‍♂️ 三大法人當日進出明細 ({actual_data_date})")
         st.write(f"🛸 **外資主力動向**： {foreign_txt}")
         st.write(f"🧸 **投信法人動向**： {trust_txt}")
@@ -274,7 +264,7 @@ if st.button("🔥 啟動跨時空全景大數據補完"):
             
         st.write("---")
         
-        # 核心分點表格
+        # 核心分點
         st.subheader(f"🔥 核心券商分點進出大對決 ({actual_data_date})")
         col_buy, col_sell = st.columns(2)
         with col_buy:

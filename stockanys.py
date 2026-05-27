@@ -279,7 +279,70 @@ else:
     if not df_inst.empty:
         st.markdown(f"### 📈 區塊 4：三大法人與空方動態連動雷達")
 
-        df_foreign = df_inst[df_inst
+
+        # 整理法人資料，避免 df_inst[df_inst 這類未完成語法造成 SyntaxError
+        df_inst_chart = df_inst.copy()
+        df_inst_chart['date'] = pd.to_datetime(df_inst_chart['date'])
+        df_inst_chart['name'] = df_inst_chart['name'].astype(str)
+
+        if 'Net_Shares' not in df_inst_chart.columns:
+            df_inst_chart['Net_Shares'] = (df_inst_chart['buy'] - df_inst_chart['sell']) / 1000
+
+        def summarize_inst(pattern):
+            sub = df_inst_chart[df_inst_chart['name'].str.contains(pattern, case=False, na=False, regex=True)]
+            if sub.empty:
+                return pd.DataFrame(columns=['date', 'Net_Shares'])
+            return sub.groupby('date', as_index=False)['Net_Shares'].sum().sort_values('date')
+
         df_foreign = summarize_inst('外資|Foreign')
-df_trust = summarize_inst('投信|Investment Trust')
-df_dealer = summarize_inst('自營商|Dealer')
+        df_trust = summarize_inst('投信|Investment Trust')
+        df_dealer = summarize_inst('自營商|Dealer')
+
+        fig4 = make_subplots(specs=[[{"secondary_y": True}]])
+
+        if not df_foreign.empty:
+            fig4.add_trace(
+                go.Bar(x=df_foreign['date'], y=df_foreign['Net_Shares'], name='外資淨買賣超'),
+                secondary_y=False
+            )
+
+        if not df_trust.empty:
+            fig4.add_trace(
+                go.Bar(x=df_trust['date'], y=df_trust['Net_Shares'], name='投信淨買賣超'),
+                secondary_y=False
+            )
+
+        if not df_dealer.empty:
+            fig4.add_trace(
+                go.Bar(x=df_dealer['date'], y=df_dealer['Net_Shares'], name='自營商淨買賣超'),
+                secondary_y=False
+            )
+
+        if not df_margin.empty and 'ShortSaleTodayBalance' in df_margin.columns:
+            df_short = df_margin.copy()
+            df_short['date'] = pd.to_datetime(df_short['date'])
+            df_short = df_short.sort_values('date')
+            fig4.add_trace(
+                go.Scatter(
+                    x=df_short['date'],
+                    y=df_short['ShortSaleTodayBalance'],
+                    mode='lines+markers',
+                    name='融券餘額'
+                ),
+                secondary_y=True
+            )
+
+        fig4.update_layout(
+            template="plotly_dark",
+            height=420,
+            margin=dict(l=10, r=10, t=30, b=10),
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        fig4.update_yaxes(title_text="法人淨買賣超（張）", secondary_y=False)
+        fig4.update_yaxes(title_text="融券餘額", secondary_y=True)
+
+        st.plotly_chart(fig4, use_container_width=True)
+
+        st.caption("註：法人買賣單位已由股數換算為張；融券餘額依 FinMind 原始欄位顯示。")
+

@@ -113,3 +113,66 @@ if st.button("🔥 啟動終極全景大數據掃描"):
 
         # 將畫好的圖表推送到網頁上
         st.plotly_chart(fig, use_container_width=True)
+        # ==========================================
+        # F. 終極籌碼防空雷達儀表板 (UI 版面建構)
+        # ==========================================
+        st.markdown("---")
+        st.markdown("## 🛡️ 終極籌碼防空儀表板")
+        
+        # ⚠️ 提示訊息：告知目前為版面展示，需另外串接資料
+        st.info("💡 溫馨提示：以下為您規劃的完美版面。由於 Yahoo 無法提供台灣籌碼數據，此處暫以「模擬變數」展示，未來可串接證交所或 FinMind API 替換真實數據。")
+
+        # 【模擬真實數據的變數】(未來這裡會寫爬蟲程式來抓真實數字)
+        mock_capital = 150  # 股本(億)
+        mock_cost_60d = 145.5 # 60日成本
+        mock_price = df_k['Close'].iloc[-1] # 抓取今天真實收盤價
+        mock_diff_percent = ((mock_price - mock_cost_60d) / mock_cost_60d) * 100
+        
+        # ---------------------------------------------------------
+        # 區塊 1: 基本防禦線 (大字報)
+        # ---------------------------------------------------------
+        st.markdown("### 🎯 區塊 1：基本防禦線")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            # 股本大小自動分類邏輯
+            capital_type = "大型股" if mock_capital > 100 else ("中型股" if mock_capital > 20 else "小型股")
+            st.metric(label="📊 公司股本", value=f"{mock_capital} 億", delta=capital_type, delta_color="off")
+        with col2:
+            st.metric(label="🛡️ 60日大戶成本線", value=f"{mock_cost_60d} 元")
+        with col3:
+            # 依據正負值自動顯示紅綠顏色
+            st.metric(label="⚖️ 當前股價與成本價差比", 
+                      value=f"{mock_price:.2f} 元", 
+                      delta=f"{mock_diff_percent:.2f}% (距離成本)")
+
+        # ---------------------------------------------------------
+        # 區塊 2: 三大法人對決表
+        # ---------------------------------------------------------
+        st.markdown("### ⚔️ 區塊 2：三大法人對決表 (單日)")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric(label="外資單日動向", value="買超", delta="+2,500 張")
+        with col2:
+            st.metric(label="投信單日動向", value="買超", delta="+800 張")
+        with col3:
+            st.metric(label="自營商單日動向", value="賣超", delta="-350 張", delta_color="inverse")
+
+        # ---------------------------------------------------------
+        # 區塊 3: 單日反水警報燈
+        # ---------------------------------------------------------
+        st.markdown("### 🚨 區塊 3：單日反水警報燈")
+        # 這裡用一點 HTML/Markdown 做出警報燈的效果
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("<h5 style='text-align: center; color: #a0a0a0;'>家數差 (籌碼集中度)</h5>", unsafe_allow_html=True)
+            # 假設家數為負(買家少賣家多 = 籌碼集中) 亮綠燈
+            st.markdown("<h3 style='text-align: center;'>🟢 集中綠燈</h3>", unsafe_allow_html=True)
+            
+        with col2:
+            st.markdown("<h5 style='text-align: center; color: #a0a0a0;'>散戶動向</h5>", unsafe_allow_html=True)
+            st.markdown("<h3 style='text-align: center;'>🏃‍♂️ 散戶逃亡 (偏多)</h3>", unsafe_allow_html=True)
+            
+        with col3:
+            st.markdown("<h5 style='text-align: center; color: #a0a0a0;'>借券賣出變動率</h5>", unsafe_allow_html=True)
+            st.metric(label="單日增減", value="-5.2%", delta="空單回補 (偏多)")

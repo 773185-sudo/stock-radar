@@ -209,55 +209,66 @@ else:
             st.metric(label=f"自營商單日 ({latest_date})", value=f"{dealer_net:,.0f} 張",
                       delta="買超偏多" if dealer_net >= 0 else "賣超偏空", delta_color="normal")
 
+       # ---------------------------------------------------------
+        # 區塊 4: 真實法人籌碼動向與趨勢圖 (升級版：三大法人獨立三區)
         # ---------------------------------------------------------
-        # 區塊 4: 真實法人籌碼動向與趨勢圖
-        # ---------------------------------------------------------
-        st.markdown(f"### 📈 區塊 4：{clean_stock_id} 法人合計買賣超與歷史趨勢線")
+        st.markdown(f"### 📈 區塊 4：{clean_stock_id} 三大法人個別買賣超與累積庫存線")
 
-        # 彙整每日三大法人合計
-        df_daily = df_inst.groupby('date')['Net_Shares'].sum().reset_index()
-        df_daily['MA5'] = df_daily['Net_Shares'].rolling(window=5).mean() # 5日籌碼均線
-        df_daily['Cumulative'] = df_daily['Net_Shares'].cumsum()          # 累積庫存趨勢
+        # 1. 數據分流與清洗 (依據字串過濾出外資、投信、自營商)
+        df_foreign = df_inst[df_inst['name'].str.contains('外資|Foreign', case=False, na=False)].groupby('date')['Net_Shares'].sum().reset_index()
+        df_trust = df_inst[df_inst['name'].str.contains('投信|Trust', case=False, na=False)].groupby('date')['Net_Shares'].sum().reset_index()
+        df_dealer = df_inst[df_inst['name'].str.contains('自營商|Dealer', case=False, na=False)].groupby('date')['Net_Shares'].sum().reset_index()
 
-        # 建立雙軸畫布
-        fig2 = make_subplots(specs=[[{"secondary_y": True}]])
+        # 2. 計算各自的累積波段籌碼 (cumsum)
+        df_foreign['Cumulative'] = df_foreign['Net_Shares'].cumsum()
+        df_trust['Cumulative'] = df_trust['Net_Shares'].cumsum()
+        df_dealer['Cumulative'] = df_dealer['Net_Shares'].cumsum()
 
-        # 1. 每日法人買賣超柱狀圖 (左軸)
-        bar_colors = ['#FF3333' if val >= 0 else '#00AA00' for val in df_daily['Net_Shares']]
-        fig2.add_trace(go.Bar(
-            x=df_daily['date'], 
-            y=df_daily['Net_Shares'], 
-            name='法人單日合計 (張)', 
-            marker_color=bar_colors,
-            opacity=0.8
-        ), secondary_y=False)
+        # 3. 建立 3 行 1 列的獨立子圖，並且全部共享 X 軸(日期)
+        fig2 = make_subplots(
+            rows=3, cols=1, 
+            shared_xaxes=True, 
+            vertical_spacing=0.08, # 區域之間的間距
+            subplot_titles=("🔴 外資動向雷達區", "🟢 投信動向雷達區", "🔵 自營商動向雷達區"),
+            specs=[[{"secondary_y": True}], [{"secondary_y": True}], [{"secondary_y": True}]]
+        )
 
-        # 2. 5日籌碼均線 (左軸)
-        fig2.add_trace(go.Scatter(
-            x=df_daily['date'], 
-            y=df_daily['MA5'], 
-            name='籌碼 5日均線', 
-            line=dict(color='#FFD700', width=2)
-        ), secondary_y=False)
+        # ---- 第一區：外資 ----
+        f_colors = ['#FF3333' if val >= 0 else '#00AA00' for val in df_foreign['Net_Shares']]
+        fig2.add_trace(go.Bar(x=df_foreign['date'], y=df_foreign['Net_Shares'], name='外資單日(張)', marker_color=f_colors, opacity=0.7), row=1, col=1, secondary_y=False)
+        fig2.add_trace(go.Scatter(x=df_foreign['date'], y=df_foreign['Cumulative'], name='外資累積庫存', line=dict(color='#FFA07A', width=2)), row=1, col=1, secondary_y=True)
 
-        # 3. 累積籌碼趨勢線 (右軸)
-        fig2.add_trace(go.Scatter(
-            x=df_daily['date'], 
-            y=df_daily['Cumulative'], 
-            name='大戶累積波段籌碼', 
-            line=dict(color='#00BFFF', width=2.5, dash='dot')
-        ), secondary_y=True)
+        # ---- 第二區：投信 ----
+        t_colors = ['#FF3333' if val >= 0 else '#00AA00' for val in df_trust['Net_Shares']]
+        fig2.add_trace(go.Bar(x=df_trust['date'], y=df_trust['Net_Shares'], name='投信單日(張)', marker_color=t_colors, opacity=0.7), row=2, col=1, secondary_y=False)
+        fig2.add_trace(go.Scatter(x=df_trust['date'], y=df_trust['Cumulative'], name='投信累積庫存', line=dict(color='#98FB98', width=2)), row=2, col=1, secondary_y=True)
 
-        # 圖表美化配置
+        # ---- 第三區：自營商 ----
+        d_colors = ['#FF3333' if val >= 0 else '#00AA00' for val in df_dealer['Net_Shares']]
+        fig2.add_trace(go.Bar(x=df_dealer['date'], y=df_dealer['Net_Shares'], name='自營商單日(張)', marker_color=d_colors, opacity=0.7), row=3, col=1, secondary_y=False)
+        fig2.add_trace(go.Scatter(x=df_dealer['date'], y=df_dealer['Cumulative'], name='自營商累積庫存', line=dict(color='#87CEFA', width=2)), row=3, col=1, secondary_y=True)
+
+        # 4. 全局圖表外觀配置美化
         fig2.update_layout(
             template="plotly_dark",
-            height=450,
-            margin=dict(l=10, r=10, t=30, b=10),
+            height=850, # 擴展高度讓三張圖都有足夠的防空視野
+            margin=dict(l=10, r=10, t=50, b=10),
             hovermode="x unified",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            showlegend=False # 關閉圖例，因為子圖標題已經很清晰，避免畫面太亂
         )
-        fig2.update_yaxes(title_text="單日 / 均線灌入張數", secondary_y=False)
-        fig2.update_yaxes(title_text="波段累積庫存張數", secondary_y=True, showgrid=False)
+
+        # 5. 各別座標軸文字設定 (左軸為單日灌入張數，右軸為波段累積庫存)
+        fig2.update_yaxes(title_text="外資單日", row=1, col=1, secondary_y=False)
+        fig2.update_yaxes(title_text="累積庫存", row=1, col=1, secondary_y=True, showgrid=False)
+        
+        fig2.update_yaxes(title_text="投信單日", row=2, col=1, secondary_y=False)
+        fig2.update_yaxes(title_text="累積庫存", row=2, col=1, secondary_y=True, showgrid=False)
+        
+        fig2.update_yaxes(title_text="自營商單日", row=3, col=1, secondary_y=False)
+        fig2.update_yaxes(title_text="累積庫存", row=3, col=1, secondary_y=True, showgrid=False)
+
+        # 將終極分區籌碼圖推上網頁網頁
+        st.plotly_chart(fig2, width='stretch')
 
         # 打上網頁展示
         st.plotly_chart(fig2, width='stretch')

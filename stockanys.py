@@ -4,31 +4,25 @@ import yfinance as yf
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import datetime
-import numpy as np
+import requests
 
 # 設定 Streamlit 網頁標題與寬螢幕配置
-st.set_page_config(page_title="🛡️ 台股籌碼防空雷達儀表板 V3", layout="wide")
+st.set_page_config(page_title="🛡️ 台股籌碼防空雷達儀表板 V4.0", layout="wide")
 
-st.title("🛡️ 終極實戰：台股籌碼防空雷達儀表板")
-st.markdown("本系統已全面移除模擬數據，100% 串接 Yahoo Finance 與證交所真實法人籌碼、借券動向及處置狀態。")
+st.title("🛡️ 實戰升級：台股籌碼防空雷達儀表板")
+st.markdown("本系統全面串接 Yahoo Finance、FinMind 籌碼數據，並即時連線證交所/櫃買中心 OpenAPI 監控處置狀態。")
 
 # ==========================================
 # 🔑 側邊欄配置區：參數輸入與防禦機制
 # ==========================================
 st.sidebar.header("⚙️ 雷達控制面板")
 
-# 1. 股票代號輸入
 stock_input = st.sidebar.text_input("請輸入台股代號", value="8069", help="例如：2409、8069、2330")
 
-# 2. 籌碼數據免費 Token 配置
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔑 籌碼數據權限")
 finmind_token = st.sidebar.text_input("輸入免費 FinMind Token", type="password", help="請輸入 FinMind Token 確保連線穩定不中斷。")
-st.sidebar.markdown("""
-[👉 點此前往 FinMind 官網免費註冊](https://finmindtrade.com/)
-""")
 
-# 3. 📅 時間範圍設定 (單一基準日 + 固定區間防禦)
 st.sidebar.markdown("---")
 st.sidebar.subheader("📅 時間範圍設定")
 end_date = st.sidebar.date_input("基準結束日期", value=datetime.date.today())
@@ -50,15 +44,12 @@ elif period_option == "1 年":
 elif period_option == "2 年":
     start_date = end_date - datetime.timedelta(days=365 * 2)
 
-st.sidebar.caption(f"🔍 系統將安全抓取：{start_date} 至 {end_date}")
-
 
 # ==========================================
-# ⚡ 高效快取數據下載函式區 (FinMind + Yahoo)
+# ⚡ 數據下載函式區 (Yahoo, FinMind, OpenAPI)
 # ==========================================
 @st.cache_data(ttl=1800)
 def fetch_smart_yfinance_data(stock_in, start, end):
-    """智慧型 Yahoo Finance 下載器"""
     symbol = stock_in.strip().upper()
     if symbol.isdigit() and len(symbol) == 4:
         df = yf.download(f"{symbol}.TW", start=start, end=end, progress=False)
@@ -74,7 +65,6 @@ def fetch_smart_yfinance_data(stock_in, start, end):
 
 @st.cache_data(ttl=1800)
 def fetch_finmind_dataset(dataset_name, stock_code, start_str, end_str, token):
-    """🌟 FinMind 泛用型數據下載器（內建防爆安全氣囊）"""
     from FinMind.data import DataLoader
     dl = DataLoader()
     if token:
@@ -82,8 +72,6 @@ def fetch_finmind_dataset(dataset_name, stock_code, start_str, end_str, token):
             dl.login_by_token(token)
         except:
             pass
-    
-    # 透過內部 try-except 阻絕 API 爆額度造成的連帶崩潰
     try:
         if dataset_name == "institutional":
             return dl.taiwan_stock_institutional_investors(stock_id=stock_code, start_date=start_str, end_date=end_str)
@@ -91,28 +79,59 @@ def fetch_finmind_dataset(dataset_name, stock_code, start_str, end_str, token):
             return dl.taiwan_stock_holding_shares_per(stock_id=stock_code, start_date=start_str, end_date=end_str)
         elif dataset_name == "margin":
             return dl.taiwan_stock_margin_purchase_short_sale(stock_id=stock_code, start_date=start_str, end_date=end_str)
-    except Exception as e:
-        # 當官方阻擋或斷線時，不回傳錯誤，而是優雅回傳空表格
+    except:
         return pd.DataFrame()
-        
     return pd.DataFrame()
 
+@st.cache_data(ttl=1800)
+def check_official_warning_status(stock_code):
+    """直接爬取證交所與櫃買中心 OpenAPI 的注意/處置股名單"""
+    status = {"is_attention": False, "is_disposition": False, "details": ""}
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    try:
+        # 證交所 API
+        twse_disp = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/TWT84U", headers=headers, timeout=5).json()
+        twse_attn = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/TWTB4U", headers=headers, timeout=5).json()
+        # 櫃買中心 API
+        tpex_disp = requests.get("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_disposition_securities", headers=headers, timeout=5).json()
+        tpex_attn = requests.get("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_attention_securities", headers=headers, timeout=5).json()
+
+        # 檢查證交所
+        for item in twse_disp:
+            if str(stock_code) == str(item.get('Code')):
+                status["is_disposition"] = True
+                status["details"] = f"處置條件：{item.get('Disposition_Condition', '詳見官網')}"
+        for item in twse_attn:
+            if str(stock_code) == str(item.get('Code')):
+                status["is_attention"] = True
+
+        # 檢查櫃買中心
+        for item in tpex_disp:
+            if str(stock_code) == str(item.get('SecuritiesCompanyCode')):
+                status["is_disposition"] = True
+                status["details"] = f"處置條件：{item.get('DispositionMeasures', '詳見官網')}"
+        for item in tpex_attn:
+            if str(stock_code) == str(item.get('SecuritiesCompanyCode')):
+                status["is_attention"] = True
+
+    except Exception:
+        status["details"] = "無法連線至官方 API"
+        
+    return status
 
 # ==========================================
-# 📊 區塊 1：智慧 K 線主技術圖表 (修復雙層欄位)
+# 📊 區塊 1：智慧 K 線主技術圖表
 # ==========================================
 st.subheader("📈 區塊 1：智慧 K 線主技術圖表")
 
-with st.spinner("正在向國際市場調閱股價 K 線數據..."):
-    df_price, final_ticker = fetch_smart_yfinance_data(stock_input, start_date, end_date)
-
-# ✅ 校正後的安全過濾語法
 clean_stock_id = "".join(filter(str.isdigit, stock_input))
+
+with st.spinner("載入股價 K 線數據..."):
+    df_price, final_ticker = fetch_smart_yfinance_data(stock_input, start_date, end_date)
 
 if df_price.empty:
     st.error(f"❌ 找不到股票代號 '{stock_input}' 的價格數據。")
 else:
-    # 欄位扁平化防禦
     try:
         df_price = df_price.reset_index()
         if isinstance(df_price.columns, pd.MultiIndex):
@@ -124,9 +143,8 @@ else:
     if 'Date' not in df_price.columns:
         df_price.rename(columns={df_price.columns[0]: 'Date'}, inplace=True)
         
-    st.success(f"✅ 成功載入 {final_ticker} 的歷史技術數據！")
+    st.success(f"✅ 成功載入 {final_ticker} 歷史技術數據！")
     
-    # 繪製 K 線圖
     fig1 = go.Figure()
     fig1.add_trace(go.Candlestick(
         x=df_price['Date'], open=df_price['Open'], high=df_price['High'], low=df_price['Low'], close=df_price['Close'],
@@ -143,13 +161,13 @@ else:
 
 
 # ==========================================
-# 💎 擴充區塊：基本資料擴充、籌碼浮額與處置警示
+# 💎 擴充區塊：基本資料擴充、籌碼浮額與官方處置警示
 # ==========================================
 st.markdown("---")
-st.markdown("## 🔍 核心雷達：股東會、浮額診斷與處置監控")
+st.markdown("## 🔍 核心雷達：股東會、浮額診斷與官方處置監控")
 
 if not finmind_token:
-    st.info("💡 提示：請在左側面板輸入您的免費 FinMind Token，即可安全解鎖法人、浮額與借券數據火網！")
+    st.info("💡 提示：請在左側面板輸入您的免費 FinMind Token 即可載入籌碼數據。")
 else:
     start_str = start_date.strftime("%Y-%m-%d")
     end_str = end_date.strftime("%Y-%m-%d")
@@ -159,162 +177,106 @@ else:
         df_margin = fetch_finmind_dataset("margin", clean_stock_id, start_str, end_str, finmind_token)
         df_inst = fetch_finmind_dataset("institutional", clean_stock_id, start_str, end_str, finmind_token)
 
-    # 檢查是否因為 API 達上限而拿到空資料
-    if df_share.empty and df_margin.empty and df_inst.empty:
-        st.error("❌【雷達通訊中斷】FinMind API 呼叫次數已達今日上限，或尚未輸入正確的 Token。籌碼相關區塊暫時無法更新，請稍後再試或更換 Token。")
-
     col_info1, col_info2, col_info3 = st.columns(3)
     
-    # 1. 股東會日期與重要日程
     with col_info1:
         st.markdown("### 📅 股東會與重要日程")
         st.metric(label="預估下次股東大會/除權息區間", value="6 月 ~ 7 月中旬")
-        st.caption("詳細日程請以公開資訊觀測站當日重訊公告為準。")
 
-    # 2. 流通籌碼估算與浮額比例狀況說明
     with col_info2:
         st.markdown("### 🌊 流通籌碼與浮額診斷")
         if not df_share.empty:
             latest_share_date = df_share['date'].max()
             df_s_latest = df_share[df_share['date'] == latest_share_date]
-            retail_pct = df_s_latest[df_s_latest['HoldingSharesPer'] <= 50]['percent'].sum()
             big_pct = df_s_latest[df_s_latest['HoldingSharesPer'] >= 1000]['percent'].sum()
             float_pct = 100 - big_pct
             
             st.metric(label="市場核心浮額比例 (非大戶持股)", value=f"{float_pct:.2f} %")
             if float_pct > 60:
-                st.error("⚠️ 警告：籌碼極度分散！市場浮額過高，易流於散戶多頭踩踏。")
+                st.error("⚠️ 警告：籌碼極度分散！")
             elif float_pct > 40:
-                st.warning("⚖️ 提示：籌碼結構中性。主力與散戶處於動態拉鋸戰。")
+                st.warning("⚖️ 提示：籌碼結構中性。")
             else:
-                st.success("💎 安全：籌碼高度集中！千張大戶強力控盤，浮額已沉澱。")
+                st.success("💎 安全：籌碼高度集中！")
         else:
-            st.caption("⚠️ 無法取得股權結構數據（可能已達 API 上限）")
+            st.caption("⚠️ 無數據")
 
-    # 3. 處置條件現狀與潛在觸發警示
+    # 🟢 亮點 1：串接官方 OpenAPI 的處置與注意股監控
     with col_info3:
-        st.markdown("### 🚨 處置股/注意股潛在警示")
-        if not df_price.empty and len(df_price) >= 6:
-            df_last6 = df_price.tail(6)
-            price_6d_ago = df_last6['Close'].iloc[0]
-            price_latest = df_last6['Close'].iloc[-1]
-            pct_6d = ((price_latest - price_6d_ago) / price_6d_ago) * 100
+        st.markdown("### 🚨 證交所/櫃買 官方狀態監控")
+        with st.spinner("查詢官方名單中..."):
+            official_status = check_official_warning_status(clean_stock_id)
             
-            st.metric(label="近 6 日累積漲跌幅動態", value=f"{pct_6d:.2f} %", delta="觸發注意線: ±32%")
-            if abs(pct_6d) >= 28:
-                st.error("🚨 潛在觸發警示：近6日漲跌幅已逼近 32% 注意股臨界點，隨時可能遭交易所列為處置股！")
-            elif abs(pct_6d) >= 20:
-                st.warning("⚠️ 警戒提示：股價近期波動劇烈，請密切注意收盤價是否異常拉高。")
-            else:
-                st.success("🟢 安全現狀：目前股價波動率處於正常安全範圍，無處置危機。")
-
-
-    # ==========================================
-    # ⚔️ 查詢日三大法人買賣超統計表格
-    # ==========================================
-    if not df_inst.empty:
-        df_inst['Net_Shares'] = (df_inst['buy'] - df_inst['sell']) / 1000
-        latest_inst_date = df_inst['date'].max()
-        
-        st.markdown("---")
-        st.markdown(f"### 📊 區塊 3.5：最新查詢交易日（{latest_inst_date}）三大法人進出戰報表")
-        
-        df_table = df_inst[df_inst['date'] == latest_inst_date].copy()
-        inst_summary = []
-        for name_key in ['外資', '投信', '自營商']:
-            sub_df = df_table[df_table['name'].str.contains(name_key, case=False, na=False)]
-            buy_val = sub_df['buy'].sum() / 1000
-            sell_val = sub_df['sell'].sum() / 1000
-            net_val = buy_val - sell_val
-            inst_summary.append({
-                "法人機構": name_key,
-                "買進金額/張數 (張)": int(round(buy_val, 0)),
-                "賣出金額/張數 (張)": int(round(sell_val, 0)),
-                "淨買賣超 (張)": int(round(net_val, 0))
-            })
-        
-        df_summary_show = pd.DataFrame(inst_summary)
-        st.dataframe(df_summary_show.style.format({
-            "買進金額/張數 (張)": "{:,}",
-            "賣出金額/張數 (張)": "{:,}",
-            "淨買賣超 (張)": "{:,}"
-        }), use_container_width=True)
-
-
-    # ==========================================
-    # 📈 區塊 4：三大法人 + 借券賣出（同步鼠標連動四區）
-    # ==========================================
-    if not df_inst.empty:
-        total_days = (end_date - start_date).days
-        st.info(f"📅 **雷達掃描範圍統計**：本次查詢基準日為 `{end_date}`，往前推進 `{period_option}`，共計掃描了 **{total_days}** 天的日期範圍。")
-        
-        st.markdown(f"### 📈 區塊 4：{clean_stock_id} 三大法人與借券賣出多維度連動雷達")
-
-        # 籌碼數據分流與清洗
-        df_foreign = df_inst[df_inst['name'].str.contains('外資|Foreign', case=False, na=False)].groupby('date')['Net_Shares'].sum().reset_index()
-        df_trust = df_inst[df_inst['name'].str.contains('投信|Trust', case=False, na=False)].groupby('date')['Net_Shares'].sum().reset_index()
-        df_dealer = df_inst[df_inst['name'].str.contains('自營商|Dealer', case=False, na=False)].groupby('date')['Net_Shares'].sum().reset_index()
-
-        df_foreign['Net_Shares'] = df_foreign['Net_Shares'].round(0)
-        df_trust['Net_Shares'] = df_trust['Net_Shares'].round(0)
-        df_dealer['Net_Shares'] = df_dealer['Net_Shares'].round(0)
-
-        df_foreign['Cumulative'] = df_foreign['Net_Shares'].cumsum().round(0)
-        df_trust['Cumulative'] = df_trust['Net_Shares'].cumsum().round(0)
-        df_dealer['Cumulative'] = df_dealer['Net_Shares'].cumsum().round(0)
-
-        # 整合借券明細 (SBL)
-        if not df_margin.empty and 'SBLShortBalanceShares' in df_margin.columns:
-            df_sbl = df_margin.groupby('date')['SBLShortBalanceShares'].sum().reset_index()
-            df_sbl['SBL_張數'] = (df_sbl['SBLShortBalanceShares'] / 1000).round(0)
-            df_sbl['SBL_增減'] = df_sbl['SBL_張數'].diff().fillna(0).round(0)
+        if official_status["is_disposition"]:
+            st.error(f"🛑 **【處置股】**\n\n此檔股票目前已被官方列為處置有價證券！\n\n{official_status['details']}")
+        elif official_status["is_attention"]:
+            st.warning("⚠️ **【注意股】**\n\n此檔股票目前被官方列為注意有價證券，請留意波動風險。")
         else:
-            df_sbl = pd.DataFrame({'date': df_foreign['date'], 'SBL_張數': 0, 'SBL_增減': 0})
+            st.success("✅ **【狀態安全】**\n\n目前未被列入官方注意或處置名單。")
 
-        # 建立 4 行 1 列的獨立子圖
-        fig2 = make_subplots(
-            rows=4, cols=1, 
-            shared_xaxes=True, 
-            vertical_spacing=0.06, 
-            subplot_titles=("🔴 外資動向雷達區", "🟢 投信動向雷達區", "🔵 自營商動向雷達區", "☠️ 空方火網：借券賣出餘額趨勢與每日增減"),
-            specs=[[{"secondary_y": True}], [{"secondary_y": True}], [{"secondary_y": True}], [{"secondary_y": True}]]
-        )
 
-        # ---- 第一區：外資 ----
-        f_colors = ['#FF3333' if val >= 0 else '#00AA00' for val in df_foreign['Net_Shares']]
-        fig2.add_trace(go.Bar(x=df_foreign['date'], y=df_foreign['Net_Shares'], name='外資單日(張)', marker_color=f_colors, opacity=0.7, hovertemplate='%{y:,.0f} 張<extra></extra>'), row=1, col=1, secondary_y=False)
-        fig2.add_trace(go.Scatter(x=df_foreign['date'], y=df_foreign['Cumulative'], name='外資累積庫存', line=dict(color='#FFA07A', width=2), hovertemplate='%{y:,.0f} 張<extra></extra>'), row=1, col=1, secondary_y=True)
+    # ==========================================
+    # ⚔️ 法人進出戰報表 & 融資融券明細表
+    # ==========================================
+    st.markdown("---")
+    st.markdown("## 📊 籌碼數據表：法人與資券明細")
+    
+    col_table1, col_table2 = st.columns([1, 1.2])
 
-        # ---- 第二區：投信 ----
-        t_colors = ['#FF3333' if val >= 0 else '#00AA00' for val in df_trust['Net_Shares']]
-        fig2.add_trace(go.Bar(x=df_trust['date'], y=df_trust['Net_Shares'], name='投信單日(張)', marker_color=t_colors, opacity=0.7, hovertemplate='%{y:,.0f} 張<extra></extra>'), row=2, col=1, secondary_y=False)
-        fig2.add_trace(go.Scatter(x=df_trust['date'], y=df_trust['Cumulative'], name='投信累積庫存', line=dict(color='#98FB98', width=2), hovertemplate='%{y:,.0f} 張<extra></extra>'), row=2, col=1, secondary_y=True)
+    with col_table1:
+        if not df_inst.empty:
+            df_inst['Net_Shares'] = (df_inst['buy'] - df_inst['sell']) / 1000
+            df_valid_inst = df_inst[(df_inst['buy'] > 0) | (df_inst['sell'] > 0)]
+            latest_inst_date = df_valid_inst['date'].max() if not df_valid_inst.empty else df_inst['date'].max()
+                
+            st.markdown(f"**三大法人最新交易日 ({latest_inst_date}) 進出**")
+            df_table = df_inst[df_inst['date'] == latest_inst_date].copy()
+            inst_summary = []
+            for name_key in ['外資', '投信', '自營商']:
+                sub_df = df_table[df_table['name'].str.contains(name_key, case=False, na=False)]
+                buy_val = sub_df['buy'].sum() / 1000
+                sell_val = sub_df['sell'].sum() / 1000
+                net_val = buy_val - sell_val
+                inst_summary.append({
+                    "機構": name_key,
+                    "買進": int(round(buy_val, 0)),
+                    "賣出": int(round(sell_val, 0)),
+                    "淨買賣超": int(round(net_val, 0))
+                })
+            
+            st.dataframe(pd.DataFrame(inst_summary).style.format({
+                "買進": "{:,}", "賣出": "{:,}", "淨買賣超": "{:,}"
+            }), use_container_width=True)
 
-        # ---- 第三區：自營商 ----
-        d_colors = ['#FF3333' if val >= 0 else '#00AA00' for val in df_dealer['Net_Shares']]
-        fig2.add_trace(go.Bar(x=df_dealer['date'], y=df_dealer['Net_Shares'], name='自營商單日(張)', marker_color=d_colors, opacity=0.7, hovertemplate='%{y:,.0f} 張<extra></extra>'), row=3, col=1, secondary_y=False)
-        fig2.add_trace(go.Scatter(x=df_dealer['date'], y=df_dealer['Cumulative'], name='自營商累積庫存', line=dict(color='#87CEFA', width=2), hovertemplate='%{y:,.0f} 張<extra></extra>'), row=3, col=1, secondary_y=True)
+    # 🟢 亮點 2：新增融資券數據明細表 (近 10 個交易日)
+    with col_table2:
+        if not df_margin.empty:
+            st.markdown("**近 10 日融資與融券變化表**")
+            df_m_show = df_margin.sort_values('date', ascending=False).head(10).copy()
+            
+            # 動態匹配欄位確保不出錯
+            cols_to_show = ['date']
+            col_names = ['日期']
+            
+            if 'MarginPurchaseTodayBalance' in df_m_show.columns:
+                cols_to_show.extend(['MarginPurchaseBuy', 'MarginPurchaseSell', 'MarginPurchaseTodayBalance'])
+                col_names.extend(['融資買進', '融資賣出', '融資餘額'])
+                
+            if 'ShortSaleTodayBalance' in df_m_show.columns:
+                cols_to_show.extend(['ShortSaleBuy', 'ShortSaleSell', 'ShortSaleTodayBalance'])
+                col_names.extend(['融券買進', '融券賣出', '融券餘額'])
+                
+            df_m_show = df_m_show[cols_to_show]
+            df_m_show.columns = col_names
+            
+            format_dict = {col: "{:,.0f}" for col in col_names if col != '日期'}
+            st.dataframe(df_m_show.style.format(format_dict), use_container_width=True)
 
-        # ---- 第四區：借券賣出 ----
-        sbl_colors = ['#FF3333' if val >= 0 else '#00AA00' for val in df_sbl['SBL_增減']]
-        fig2.add_trace(go.Bar(x=df_sbl['date'], y=df_sbl['SBL_增減'], name='借券單日增減(張)', marker_color=sbl_colors, opacity=0.7, hovertemplate='較前日增減: %{y:,.0f} 張<extra></extra>'), row=4, col=1, secondary_y=False)
-        fig2.add_trace(go.Scatter(x=df_sbl['date'], y=df_sbl['SBL_張數'], name='借券總餘額(張)', line=dict(color='#E066FF', width=2.5), hovertemplate='借券總餘額: %{y:,.0f} 張<extra></extra>'), row=4, col=1, secondary_y=True)
 
-        # 5. 全局配置
-        fig2.update_layout(template="plotly_dark", height=1050, margin=dict(l=10, r=10, t=50, b=10), hovermode="x unified", showlegend=False)
+    # ==========================================
+    # 📈 區塊 4：三大法人 + 融券動態雷達
+    # ==========================================
+    if not df_inst.empty:
+        st.markdown(f"### 📈 區塊 4：三大法人與空方動態連動雷達")
 
-        # 格式化
-        for i in range(1, 5):
-            fig2.update_yaxes(tickformat=",.0f", row=i, col=1, secondary_y=False)
-            fig2.update_yaxes(tickformat=",.0f", row=i, col=1, secondary_y=True, showgrid=False)
-
-        fig2.update_yaxes(title_text="外資單日", row=1, col=1, secondary_y=False)
-        fig2.update_yaxes(title_text="累積庫存", row=1, col=1, secondary_y=True)
-        fig2.update_yaxes(title_text="投信單日", row=2, col=1, secondary_y=False)
-        fig2.update_yaxes(title_text="累積庫存", row=2, col=1, secondary_y=True)
-        fig2.update_yaxes(title_text="自營商單日", row=3, col=1, secondary_y=False)
-        fig2.update_yaxes(title_text="累積庫存", row=3, col=1, secondary_y=True)
-        fig2.update_yaxes(title_text="借券單日增減", row=4, col=1, secondary_y=False)
-        fig2.update_yaxes(title_text="借券總餘額", row=4, col=1, secondary_y=True)
-
-        st.plotly_chart(fig2, width='stretch')
+        df_foreign = df_inst[df_inst

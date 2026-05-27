@@ -280,3 +280,6 @@ else:
         st.markdown(f"### 📈 區塊 4：三大法人與空方動態連動雷達")
 
         df_foreign = df_inst[df_inst
+        df_foreign = summarize_inst('外資|Foreign')
+df_trust = summarize_inst('投信|Investment Trust')
+df_dealer = summarize_inst('自營商|Dealer')

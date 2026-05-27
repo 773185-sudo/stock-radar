@@ -146,100 +146,139 @@ if st.button("🔥 啟動終極全景大數據掃描"):
                       value=f"{mock_price:.2f} 元", 
                       delta=f"{mock_diff_percent:.2f}% (距離成本)")
 
-       # ==========================================
-        # 🌟 終極籌碼防空儀表板 (真實 FinMind API 數據)
+      # ==========================================
+        # 🌟 終極籌碼防空儀表板 (真實 FinMind API + 高效快取防禦)
         # ==========================================
         st.markdown("---")
         st.markdown("## 🛡️ 真實法人籌碼對決雷達")
 
-        with st.spinner("連線證交所/櫃買中心，抓取真實籌碼中..."):
+        # A. 在側邊欄配置 Token 輸入框，全面保護您的看盤額度
+        st.sidebar.markdown("---")
+        st.sidebar.header("🔑 籌碼數據權限設定")
+        finmind_token = st.sidebar.text_input("請輸入您的免費 FinMind Token", type="password", help="未輸入則使用匿名連線，極易因爆額度而斷線。")
+        st.sidebar.markdown("""
+        [👉 點此前往 FinMind 官網免費註冊](https://finmindtrade.com/)  
+        *(以 Google 登入後，至個人後台複製 Token 貼來此處，每日即享有 600 次真實數據查詢額度)*
+        """)
+
+        # B. 建立具有「快取保護機制」的真實數據下載函式 (防止網頁重整重複消耗額度)
+        @st.cache_data(ttl=1800) # 快取 30 分鐘
+        def fetch_real_institutional_data(stock_code, start_str, end_str, token):
+            from FinMind.data import DataLoader
             dl = DataLoader()
-            # 抓取法人資料 (FinMind 使用純數字代號)
-            df_inst = dl.taiwan_stock_institutional_investors(
-                stock_id=stock_input,
-                start_date=start_date.strftime("%Y-%m-%d"),
-                end_date=end_date.strftime("%Y-%m-%d")
+            if token:
+                try:
+                    dl.login_by_token(token) # 使用您的專屬 Token 登入
+                except:
+                    pass
+            # 抓取真實三大法人資料
+            df = dl.taiwan_stock_institutional_investors(
+                stock_id=stock_code,
+                start_date=start_str,
+                end_date=end_str
             )
+            return df
 
+        # C. 自動清洗代號 (不管輸入 8069.TWO 還是 2409.TW，都自動轉為純數字 8069、2409 送給證交所)
+        clean_stock_id = "".join(filter(str.isdigit, stock_input))
+
+        # D. 執行真實數據調用
+        with st.spinner("🚀 正在穿透證交所防火牆，安全載入真實籌碼數據中..."):
+            try:
+                df_inst = fetch_real_institutional_data(
+                    stock_code=clean_stock_id,
+                    start_str=start_date.strftime("%Y-%m-%d"),
+                    end_str=end_date.strftime("%Y-%m-%d"),
+                    token=finmind_token
+                )
+            except Exception as e:
+                st.error(f"❌ 無法連線至數據庫，可能已被官方限制 IP。請於側邊欄輸入免費的個人 Token 解除限制。錯誤原因: {e}")
+                df_inst = pd.DataFrame()
+
+        # E. 開始繪製真實籌碼面板
         if df_inst.empty:
-            st.warning("⚠️ 目前查無這段期間的三大法人籌碼資料，可能是近期無交易或假日期。")
+            st.warning("⚠️ 目前該日期區間無真實籌碼資料，或是匿名額度已達上限。請嘗試縮短查詢天數，或在左側填入免費 Token。")
         else:
-            # FinMind 的資料單位通常是「股」，我們換算成「張」 (除以 1000)
-            # 計算淨買賣超：買進 - 賣出
-            df_inst['Net'] = (df_inst['buy'] - df_inst['sell']) / 1000
+            # 將證交所的「股」換算為台股習慣的「張」 (除以 1000)
+            df_inst['Net_Shares'] = (df_inst['buy'] - df_inst['sell']) / 1000
 
             # ---------------------------------------------------------
-            # 區塊 2: 三大法人對決表 (真實最新單日)
+            # 區塊 2: 三大法人對決表 (真實最新單日數據)
             # ---------------------------------------------------------
-            st.markdown("### ⚔️ 最新單日三大法人動向")
+            st.markdown("### ⚔️ 區塊 2：最新單日三大法人動向")
             
-            # 取得有資料的最新一天
             latest_date = df_inst['date'].max()
             df_latest = df_inst[df_inst['date'] == latest_date]
 
-            # 自動分類計算三大法人 (使用正規表達式涵蓋中英文字位)
-            foreign_net = df_latest[df_latest['name'].str.contains('外資|Foreign', case=False, na=False)]['Net'].sum()
-            trust_net = df_latest[df_latest['name'].str.contains('投信|Trust', case=False, na=False)]['Net'].sum()
-            dealer_net = df_latest[df_latest['name'].str.contains('自營商|Dealer', case=False, na=False)]['Net'].sum()
+            # 透過字串比對，精準分離外資、投信、自營商
+            foreign_net = df_latest[df_latest['name'].str.contains('外資|Foreign', case=False, na=False)]['Net_Shares'].sum()
+            trust_net = df_latest[df_latest['name'].str.contains('投信|Trust', case=False, na=False)]['Net_Shares'].sum()
+            dealer_net = df_latest[df_latest['name'].str.contains('自營商|Dealer', case=False, na=False)]['Net_Shares'].sum()
 
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric(label=f"外資 ({latest_date})", value=f"{foreign_net:,.0f} 張")
+                st.metric(label=f"外資單日 ({latest_date})", value=f"{foreign_net:,.0f} 張", 
+                          delta="買超偏多" if foreign_net >= 0 else "賣超偏空", delta_color="normal")
             with col2:
-                st.metric(label=f"投信 ({latest_date})", value=f"{trust_net:,.0f} 張")
+                st.metric(label=f"投信單日 ({latest_date})", value=f"{trust_net:,.0f} 張",
+                          delta="買超偏多" if trust_net >= 0 else "賣超偏空", delta_color="normal")
             with col3:
-                st.metric(label=f"自營商 ({latest_date})", value=f"{dealer_net:,.0f} 張")
+                st.metric(label=f"自營商單日 ({latest_date})", value=f"{dealer_net:,.0f} 張",
+                          delta="買超偏多" if dealer_net >= 0 else "賣超偏空", delta_color="normal")
 
             # ---------------------------------------------------------
-            # 區塊 4: 真實法人籌碼動向與趨勢圖
+            # 區塊 4: 真實法人籌碼動向與趨勢圖 (柱狀 + 均線 + 右軸累積)
             # ---------------------------------------------------------
-            st.markdown("### 📈 三大法人合計買賣超趨勢圖")
+            st.markdown(f"### 📈 區塊 4：{clean_stock_id} 法人合計買賣超與歷史趨勢線")
 
-            # 將每天的所有法人買賣超加總，計算出每天的「總淨買賣」
-            df_daily = df_inst.groupby('date')['Net'].sum().reset_index()
-            # 計算 5 日平均與累積籌碼
-            df_daily['MA5'] = df_daily['Net'].rolling(window=5).mean()
-            df_daily['Cumulative'] = df_daily['Net'].cumsum()
+            # 計算每日三大法人合計
+            df_daily = df_inst.groupby('date')['Net_Shares'].sum().reset_index()
+            df_daily['MA5'] = df_daily['Net_Shares'].rolling(window=5).mean() # 5日籌碼平均線
+            df_daily['Cumulative'] = df_daily['Net_Shares'].cumsum()          # 累積籌碼趨勢
 
-            # 建立雙 Y 軸圖表
+            # 建立高級雙 Y 軸畫布
             fig2 = make_subplots(specs=[[{"secondary_y": True}]])
 
-            # A. 柱狀圖 (每日真實買賣超)
-            bar_colors = ['#FF3333' if val >= 0 else '#00AA00' for val in df_daily['Net']]
+            # 1. 每日法人買賣超柱狀圖 (左軸)
+            # 買超為正顯示紅色，賣超為負顯示綠色
+            bar_colors = ['#FF3333' if val >= 0 else '#00AA00' for val in df_daily['Net_Shares']]
             fig2.add_trace(go.Bar(
                 x=df_daily['date'], 
-                y=df_daily['Net'], 
-                name='單日合計買賣超 (張)', 
+                y=df_daily['Net_Shares'], 
+                name='法人單日合計 (張)', 
                 marker_color=bar_colors,
-                opacity=0.7
+                opacity=0.8
             ), secondary_y=False)
 
-            # B. 趨勢圖 (5日均線)
+            # 2. 5日籌碼均線 (左軸) - 用來觀察主力有沒有連續吃貨
             fig2.add_trace(go.Scatter(
                 x=df_daily['date'], 
                 y=df_daily['MA5'], 
-                name='5日均線', 
-                line=dict(color='#FFD700', width=2)
+                name='籌碼 5日均線', 
+                line=dict(color='#FFD700', width=2) # 金色
             ), secondary_y=False)
 
-            # C. 累積趨勢線
+            # 3. 累積籌碼趨勢線 (右軸) - 觀察長線大戶資金是流入還是流出
             fig2.add_trace(go.Scatter(
                 x=df_daily['date'], 
                 y=df_daily['Cumulative'], 
-                name='累積籌碼', 
-                line=dict(color='#00BFFF', width=2, dash='dot')
+                name='大戶累積波段籌碼', 
+                line=dict(color='#00BFFF', width=2.5, dash='dot') # 藍色波浪虛線
             ), secondary_y=True)
 
-            # 圖表版面優化
+            # 圖表整體美化
             fig2.update_layout(
                 template="plotly_dark",
-                height=400,
-                margin=dict(l=20, r=20, t=30, b=20),
+                height=450,
+                margin=dict(l=10, r=10, t=30, b=10),
                 hovermode="x unified",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
-            fig2.update_yaxes(title_text="單日/均線 (張)", secondary_y=False)
-            fig2.update_yaxes(title_text="累積 (張)", secondary_y=True, showgrid=False)
+            fig2.update_yaxes(title_text="單日 / 均線灌入張數", secondary_y=False)
+            fig2.update_yaxes(title_text="波段累積庫存張數", secondary_y=True, showgrid=False)
+
+            # 把精心調製的真實籌碼圖打上網頁
+            st.plotly_chart(fig2, width='stretch')
 
             # 輸出到網頁
             st.plotly_chart(fig2, use_container_width=True)

@@ -4,7 +4,7 @@ import yfinance as yf
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import datetime
-import numpy as np  # 修正 NameError 關鍵匯入
+import numpy as np  # 確保矩陣運算正常
 
 # 設定 Streamlit 網頁標題與主題
 st.set_page_config(page_title="🛡️ 台股籌碼防空雷達儀表板", layout="wide")
@@ -105,10 +105,14 @@ with st.spinner("正在向國際市場調閱股價 K 線數據..."):
 if df_price.empty:
     st.error(f"❌ 找不到股票代號 '{stock_input}' 的市場價格數據，請確認代號是否輸入正確。")
 else:
-    st.success(f"✅ 成功載入 {final_ticker} 的歷史技術數據！")
+    # 🌟 核心關鍵修復：如果欄位是新版 yfinance 的雙層 MultiIndex，強制降維成單層欄位
+    if isinstance(df_price.columns, pd.MultiIndex):
+        df_price.columns = df_price.columns.get_level_values(0)
     
-    # 支援新舊版 pandas index 相容處理
+    # 確保欄位完全壓平後，再進行索引重設
     df_price = df_price.reset_index()
+    
+    st.success(f"✅ 成功載入 {final_ticker} 的歷史技術數據！")
     
     # 建立 K 線圖表
     fig1 = go.Figure()
@@ -137,7 +141,6 @@ else:
         xaxis_rangeslider_visible=False,
         hovermode="x unified"
     )
-    # 依最新 Streamlit 規範，移除 use_container_width 改用 width='stretch'
     st.plotly_chart(fig1, width='stretch')
 
 

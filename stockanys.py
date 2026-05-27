@@ -29,10 +29,16 @@ if st.button("🔥 啟動終極全景大數據掃描"):
         current_date = datetime.datetime.now().strftime("%Y/%m/%d")
         
         try:
-            # ==========================================
+         
+           # ==========================================
             # 3. 核心數據流 A：即時動態日K線與成交量抓取
             # ==========================================
-            df_k = yf.download(stock_yahoo, period="3mo", interval="1d", progress=False)
+            ticker = yf.Ticker(stock_yahoo)
+            df_k = ticker.history(period="3mo", interval="1d")
+            
+            if df_k.empty:
+                st.error(f"❌ 查無此台股代號 [{stock_input}] 之歷史數據，請確認是否為上市櫃正常股票。")
+                st.stop()
             
             if df_k.empty:
                 st.error(f"❌ 查無此台股代號 [{stock_input}] 之歷史數據，請確認是否為上市櫃正常股票。")

@@ -4,6 +4,7 @@ import yfinance as yf
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import datetime
+import numpy as np
 
 # ==========================================
 # 1. 網頁基本配置 (手機/電腦全適應、科技風)

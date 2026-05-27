@@ -20,7 +20,7 @@ st.sidebar.header("⚙️ 雷達控制面板")
 # 1. 股票代號輸入 (支援純數字或自帶後綴)
 stock_input = st.sidebar.text_input("請輸入台股代號", value="8069", help="例如：2409、8069、2330")
 
-# 2. 籌碼數據免費 Token 配置
+# 2. 籌碼數據免費 Token配置
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔑 籌碼數據權限")
 finmind_token = st.sidebar.text_input("輸入免費 FinMind Token", type="password", help="未輸入則使用匿名連線，極易因爆額度而斷線。")
@@ -105,13 +105,24 @@ with st.spinner("正在向國際市場調閱股價 K 線數據..."):
 if df_price.empty:
     st.error(f"❌ 找不到股票代號 '{stock_input}' 的市場價格數據，請確認代號是否輸入正確。")
 else:
-    # 🌟 核心關鍵修復：如果欄位是新版 yfinance 的雙層 MultiIndex，強制降維成單層欄位
-    if isinstance(df_price.columns, pd.MultiIndex):
-        df_price.columns = df_price.columns.get_level_values(0)
-    
-    # 確保欄位完全壓平後，再進行索引重設
-    df_price = df_price.reset_index()
-    
+    # 🌟 終極鋼鐵防禦：徹底摧毀 yfinance 雙層欄位問題 🌟
+    try:
+        # 1. 先把 Date 索引解放出來成一般欄位
+        df_price = df_price.reset_index()
+        
+        # 2. 如果是雙層欄位，強制只取第一層名稱
+        if isinstance(df_price.columns, pd.MultiIndex):
+            df_price.columns = [col[0] for col in df_price.columns]
+        
+        # 3. 強制將所有欄位名稱字串化並去除空白
+        df_price.columns = [str(col).strip() for col in df_price.columns]
+    except Exception as e:
+        st.warning(f"欄位格式清洗提示: {e}")
+
+    # 再次檢查 'Date' 是否成功歸位，若依然失敗則手動將第一欄命名為 Date
+    if 'Date' not in df_price.columns:
+        df_price.rename(columns={df_price.columns[0]: 'Date'}, inplace=True)
+        
     st.success(f"✅ 成功載入 {final_ticker} 的歷史技術數據！")
     
     # 建立 K 線圖表

@@ -176,3 +176,69 @@ if st.button("🔥 啟動終極全景大數據掃描"):
         with col3:
             st.markdown("<h5 style='text-align: center; color: #a0a0a0;'>借券賣出變動率</h5>", unsafe_allow_html=True)
             st.metric(label="單日增減", value="-5.2%", delta="空單回補 (偏多)")
+
+# ---------------------------------------------------------
+        # 區塊 4: 法人籌碼動向與趨勢圖 (複合圖表)
+        # ---------------------------------------------------------
+        st.markdown("### 📈 區塊 4：法人籌碼動向趨勢圖 (模擬數據演示)")
+        
+        # 1. 產生模擬歷史數據 (近 30 天法人買賣超)
+        dates = pd.date_range(end=datetime.date.today(), periods=30)
+        # 隨機產生買賣超張數 (介於 -5000 到 5000 之間)
+        np.random.seed(42) # 固定亂數種子讓畫面穩定，實際串接時請拿掉
+        net_buy_sell = np.random.randint(-5000, 5000, size=30)
+        
+        # 建立 DataFrame 並計算均線與累積值
+        df_mock = pd.DataFrame({'Date': dates, 'Net': net_buy_sell})
+        df_mock['MA5'] = df_mock['Net'].rolling(window=5).mean() # 5日平均線
+        df_mock['Cumulative'] = df_mock['Net'].cumsum()          # 累積買賣超
+
+        # 2. 建立雙 Y 軸圖表
+        fig2 = make_subplots(specs=[[{"secondary_y": True}]])
+
+        # A. 柱狀圖 (每日買賣超，對應左側 Y 軸)
+        # 買超為紅，賣超為綠
+        bar_colors = ['#FF3333' if val >= 0 else '#00AA00' for val in df_mock['Net']]
+        fig2.add_trace(go.Bar(
+            x=df_mock['Date'], 
+            y=df_mock['Net'], 
+            name='單日買賣超 (張)', 
+            marker_color=bar_colors,
+            opacity=0.7
+        ), secondary_y=False)
+
+        # B. 趨勢圖 (5日平均線，對應左側 Y 軸)
+        fig2.add_trace(go.Scatter(
+            x=df_mock['Date'], 
+            y=df_mock['MA5'], 
+            name='5日平均線', 
+            line=dict(color='#FFD700', width=2) # 金色
+        ), secondary_y=False)
+
+        # C. 累積趨勢線 (看長期方向，對應右側 Y 軸，避免刻度被單日數據吃掉)
+        fig2.add_trace(go.Scatter(
+            x=df_mock['Date'], 
+            y=df_mock['Cumulative'], 
+            name='累積買賣超', 
+            line=dict(color='#00BFFF', width=2, dash='dot') # 藍色虛線
+        ), secondary_y=True)
+
+        # 3. 版面細節優化
+        fig2.update_layout(
+            template="plotly_dark",
+            height=400,
+            margin=dict(l=20, r=20, t=30, b=20),
+            hovermode="x unified", # 滑鼠游標對齊時顯示所有數據
+            legend=dict(
+                orientation="h",   # 圖例橫向排列
+                yanchor="bottom", y=1.02, 
+                xanchor="right", x=1
+            )
+        )
+        
+        # 設定雙 Y 軸的標題
+        fig2.update_yaxes(title_text="單日/均線 張數", secondary_y=False)
+        fig2.update_yaxes(title_text="累積 張數", secondary_y=True, showgrid=False)
+
+        # 輸出到網頁
+        st.plotly_chart(fig2, use_container_width=True)

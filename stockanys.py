@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import datetime
 import numpy as np
-
+from FinMind.data import DataLoader
 # ==========================================
 # 1. 網頁基本配置 (手機/電腦全適應、科技風)
 # ==========================================
@@ -146,100 +146,100 @@ if st.button("🔥 啟動終極全景大數據掃描"):
                       value=f"{mock_price:.2f} 元", 
                       delta=f"{mock_diff_percent:.2f}% (距離成本)")
 
-        # ---------------------------------------------------------
-        # 區塊 2: 三大法人對決表
-        # ---------------------------------------------------------
-        st.markdown("### ⚔️ 區塊 2：三大法人對決表 (單日)")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric(label="外資單日動向", value="買超", delta="+2,500 張")
-        with col2:
-            st.metric(label="投信單日動向", value="買超", delta="+800 張")
-        with col3:
-            st.metric(label="自營商單日動向", value="賣超", delta="-350 張", delta_color="inverse")
+       # ==========================================
+        # 🌟 終極籌碼防空儀表板 (真實 FinMind API 數據)
+        # ==========================================
+        st.markdown("---")
+        st.markdown("## 🛡️ 真實法人籌碼對決雷達")
 
-        # ---------------------------------------------------------
-        # 區塊 3: 單日反水警報燈
-        # ---------------------------------------------------------
-        st.markdown("### 🚨 區塊 3：單日反水警報燈")
-        # 這裡用一點 HTML/Markdown 做出警報燈的效果
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.markdown("<h5 style='text-align: center; color: #a0a0a0;'>家數差 (籌碼集中度)</h5>", unsafe_allow_html=True)
-            # 假設家數為負(買家少賣家多 = 籌碼集中) 亮綠燈
-            st.markdown("<h3 style='text-align: center;'>🟢 集中綠燈</h3>", unsafe_allow_html=True)
-            
-        with col2:
-            st.markdown("<h5 style='text-align: center; color: #a0a0a0;'>散戶動向</h5>", unsafe_allow_html=True)
-            st.markdown("<h3 style='text-align: center;'>🏃‍♂️ 散戶逃亡 (偏多)</h3>", unsafe_allow_html=True)
-            
-        with col3:
-            st.markdown("<h5 style='text-align: center; color: #a0a0a0;'>借券賣出變動率</h5>", unsafe_allow_html=True)
-            st.metric(label="單日增減", value="-5.2%", delta="空單回補 (偏多)")
-
-# ---------------------------------------------------------
-        # 區塊 4: 法人籌碼動向與趨勢圖 (複合圖表)
-        # ---------------------------------------------------------
-        st.markdown("### 📈 區塊 4：法人籌碼動向趨勢圖 (模擬數據演示)")
-        
-        # 1. 產生模擬歷史數據 (近 30 天法人買賣超)
-        dates = pd.date_range(end=datetime.date.today(), periods=30)
-        # 隨機產生買賣超張數 (介於 -5000 到 5000 之間)
-        np.random.seed(42) # 固定亂數種子讓畫面穩定，實際串接時請拿掉
-        net_buy_sell = np.random.randint(-5000, 5000, size=30)
-        
-        # 建立 DataFrame 並計算均線與累積值
-        df_mock = pd.DataFrame({'Date': dates, 'Net': net_buy_sell})
-        df_mock['MA5'] = df_mock['Net'].rolling(window=5).mean() # 5日平均線
-        df_mock['Cumulative'] = df_mock['Net'].cumsum()          # 累積買賣超
-
-        # 2. 建立雙 Y 軸圖表
-        fig2 = make_subplots(specs=[[{"secondary_y": True}]])
-
-        # A. 柱狀圖 (每日買賣超，對應左側 Y 軸)
-        # 買超為紅，賣超為綠
-        bar_colors = ['#FF3333' if val >= 0 else '#00AA00' for val in df_mock['Net']]
-        fig2.add_trace(go.Bar(
-            x=df_mock['Date'], 
-            y=df_mock['Net'], 
-            name='單日買賣超 (張)', 
-            marker_color=bar_colors,
-            opacity=0.7
-        ), secondary_y=False)
-
-        # B. 趨勢圖 (5日平均線，對應左側 Y 軸)
-        fig2.add_trace(go.Scatter(
-            x=df_mock['Date'], 
-            y=df_mock['MA5'], 
-            name='5日平均線', 
-            line=dict(color='#FFD700', width=2) # 金色
-        ), secondary_y=False)
-
-        # C. 累積趨勢線 (看長期方向，對應右側 Y 軸，避免刻度被單日數據吃掉)
-        fig2.add_trace(go.Scatter(
-            x=df_mock['Date'], 
-            y=df_mock['Cumulative'], 
-            name='累積買賣超', 
-            line=dict(color='#00BFFF', width=2, dash='dot') # 藍色虛線
-        ), secondary_y=True)
-
-        # 3. 版面細節優化
-        fig2.update_layout(
-            template="plotly_dark",
-            height=400,
-            margin=dict(l=20, r=20, t=30, b=20),
-            hovermode="x unified", # 滑鼠游標對齊時顯示所有數據
-            legend=dict(
-                orientation="h",   # 圖例橫向排列
-                yanchor="bottom", y=1.02, 
-                xanchor="right", x=1
+        with st.spinner("連線證交所/櫃買中心，抓取真實籌碼中..."):
+            dl = DataLoader()
+            # 抓取法人資料 (FinMind 使用純數字代號)
+            df_inst = dl.taiwan_stock_institutional_investors(
+                stock_id=stock_input,
+                start_date=start_date.strftime("%Y-%m-%d"),
+                end_date=end_date.strftime("%Y-%m-%d")
             )
-        )
-        
-        # 設定雙 Y 軸的標題
-        fig2.update_yaxes(title_text="單日/均線 張數", secondary_y=False)
-        fig2.update_yaxes(title_text="累積 張數", secondary_y=True, showgrid=False)
 
-        # 輸出到網頁
-        st.plotly_chart(fig2, use_container_width=True)
+        if df_inst.empty:
+            st.warning("⚠️ 目前查無這段期間的三大法人籌碼資料，可能是近期無交易或假日期。")
+        else:
+            # FinMind 的資料單位通常是「股」，我們換算成「張」 (除以 1000)
+            # 計算淨買賣超：買進 - 賣出
+            df_inst['Net'] = (df_inst['buy'] - df_inst['sell']) / 1000
+
+            # ---------------------------------------------------------
+            # 區塊 2: 三大法人對決表 (真實最新單日)
+            # ---------------------------------------------------------
+            st.markdown("### ⚔️ 最新單日三大法人動向")
+            
+            # 取得有資料的最新一天
+            latest_date = df_inst['date'].max()
+            df_latest = df_inst[df_inst['date'] == latest_date]
+
+            # 自動分類計算三大法人 (使用正規表達式涵蓋中英文字位)
+            foreign_net = df_latest[df_latest['name'].str.contains('外資|Foreign', case=False, na=False)]['Net'].sum()
+            trust_net = df_latest[df_latest['name'].str.contains('投信|Trust', case=False, na=False)]['Net'].sum()
+            dealer_net = df_latest[df_latest['name'].str.contains('自營商|Dealer', case=False, na=False)]['Net'].sum()
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric(label=f"外資 ({latest_date})", value=f"{foreign_net:,.0f} 張")
+            with col2:
+                st.metric(label=f"投信 ({latest_date})", value=f"{trust_net:,.0f} 張")
+            with col3:
+                st.metric(label=f"自營商 ({latest_date})", value=f"{dealer_net:,.0f} 張")
+
+            # ---------------------------------------------------------
+            # 區塊 4: 真實法人籌碼動向與趨勢圖
+            # ---------------------------------------------------------
+            st.markdown("### 📈 三大法人合計買賣超趨勢圖")
+
+            # 將每天的所有法人買賣超加總，計算出每天的「總淨買賣」
+            df_daily = df_inst.groupby('date')['Net'].sum().reset_index()
+            # 計算 5 日平均與累積籌碼
+            df_daily['MA5'] = df_daily['Net'].rolling(window=5).mean()
+            df_daily['Cumulative'] = df_daily['Net'].cumsum()
+
+            # 建立雙 Y 軸圖表
+            fig2 = make_subplots(specs=[[{"secondary_y": True}]])
+
+            # A. 柱狀圖 (每日真實買賣超)
+            bar_colors = ['#FF3333' if val >= 0 else '#00AA00' for val in df_daily['Net']]
+            fig2.add_trace(go.Bar(
+                x=df_daily['date'], 
+                y=df_daily['Net'], 
+                name='單日合計買賣超 (張)', 
+                marker_color=bar_colors,
+                opacity=0.7
+            ), secondary_y=False)
+
+            # B. 趨勢圖 (5日均線)
+            fig2.add_trace(go.Scatter(
+                x=df_daily['date'], 
+                y=df_daily['MA5'], 
+                name='5日均線', 
+                line=dict(color='#FFD700', width=2)
+            ), secondary_y=False)
+
+            # C. 累積趨勢線
+            fig2.add_trace(go.Scatter(
+                x=df_daily['date'], 
+                y=df_daily['Cumulative'], 
+                name='累積籌碼', 
+                line=dict(color='#00BFFF', width=2, dash='dot')
+            ), secondary_y=True)
+
+            # 圖表版面優化
+            fig2.update_layout(
+                template="plotly_dark",
+                height=400,
+                margin=dict(l=20, r=20, t=30, b=20),
+                hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            fig2.update_yaxes(title_text="單日/均線 (張)", secondary_y=False)
+            fig2.update_yaxes(title_text="累積 (張)", secondary_y=True, showgrid=False)
+
+            # 輸出到網頁
+            st.plotly_chart(fig2, use_container_width=True)

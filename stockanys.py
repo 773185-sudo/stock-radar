@@ -101,7 +101,7 @@ st.subheader("📈 區塊 1：智慧 K 線主技術圖表")
 with st.spinner("正在向國際市場調閱股價 K 線數據..."):
     df_price, final_ticker = fetch_smart_yfinance_data(stock_input, start_date, end_date)
 
-clean_stock_id = "".join(filter(str.isdigit(c) for c in stock_input))
+clean_stock_id = "".join(filter(str.isdigit, stock_input))
 
 if df_price.empty:
     st.error(f"❌ 找不到股票代號 '{stock_input}' 的價格數據。")

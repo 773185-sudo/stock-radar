@@ -5,179 +5,426 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import datetime
 import requests
+import numpy as np
 
-# ==========================================
-# 1. 網頁基本配置
-# ==========================================
+# ============================================================
+# 台股籌碼防空雷達 V2 Stable
+# 功能：K線、漲跌、三大法人、融資融券、借券賣出餘額、基本資料股本
+# 套件：pip install streamlit pandas yfinance plotly requests FinMind numpy
+# 執行：streamlit run stockanys_v2_stable.py
+# ============================================================
+
 st.set_page_config(
-    page_title="台股終極籌碼防空雷達",
+    page_title="台股籌碼防空雷達 V2 Stable",
     page_icon="📡",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-st.title("📡 台股終極籌碼與 K 線防空雷達")
-st.markdown(
-    "整合 Yahoo Finance 歷史 K 線、成交量、FinMind 法人籌碼、融資融券，以及證交所/櫃買中心官方注意與處置股監控。"
-)
-st.markdown("---")
+st.title("📡 台股籌碼防空雷達 V2 Stable")
+st.caption("K線 / 漲跌 / 三大法人 / 融資融券 / 借券賣出餘額 / 基本資料股本")
 
-# ==========================================
-# 2. 側邊欄參數輸入區
-# ==========================================
+# ============================================================
+# 側邊欄
+# ============================================================
 st.sidebar.header("⚙️ 雷達控制面板")
 
 stock_input = st.sidebar.text_input(
-    "請輸入台股 4 碼股票代號",
+    "股票代號",
     value="8069",
-    help="例如：2330、2409、3481、8069"
+    help="請輸入台股 4 碼股票代號，例如 2330、8069、6854"
 ).strip()
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("🔑 籌碼數據權限")
 finmind_token = st.sidebar.text_input(
     "FinMind Token",
+    value="",
     type="password",
-    help="若要載入法人、融資融券、股權分布資料，請輸入 FinMind Token。"
+    help="法人、資券、股權分布、借券資料建議輸入 FinMind Token。"
 )
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("📅 時間範圍設定")
 
 today = datetime.date.today()
 
 period_option = st.sidebar.selectbox(
-    "快速選擇顯示區間",
-    ["自訂", "1 個月", "3 個月", "半年", "1 年", "2 年"],
-    index=3
+    "顯示區間",
+    ["1個月", "3個月", "半年", "1年", "2年", "3年"],
+    index=2
 )
 
-default_end_date = today
+period_days = {
+    "1個月": 31,
+    "3個月": 93,
+    "半年": 183,
+    "1年": 366,
+    "2年": 732,
+    "3年": 1098
+}[period_option]
 
-if period_option == "1 個月":
-    default_start_date = default_end_date - datetime.timedelta(days=30)
-elif period_option == "3 個月":
-    default_start_date = default_end_date - datetime.timedelta(days=90)
-elif period_option == "半年":
-    default_start_date = default_end_date - datetime.timedelta(days=182)
-elif period_option == "1 年":
-    default_start_date = default_end_date - datetime.timedelta(days=365)
-elif period_option == "2 年":
-    default_start_date = default_end_date - datetime.timedelta(days=365 * 2)
-else:
-    default_start_date = default_end_date - datetime.timedelta(days=90)
+default_start = today - datetime.timedelta(days=period_days)
 
-col_date1, col_date2 = st.sidebar.columns(2)
-with col_date1:
-    start_date = st.date_input("起始日期", value=default_start_date)
-with col_date2:
-    end_date = st.date_input("結束日期", value=default_end_date)
+col_s1, col_s2 = st.sidebar.columns(2)
+with col_s1:
+    start_date = st.date_input("起始日", value=default_start)
+with col_s2:
+    end_date = st.date_input("結束日", value=today)
 
-run_scan = st.sidebar.button("🔥 啟動雷達掃描", use_container_width=True)
+k_period = st.sidebar.radio("K線週期", ["日K", "週K", "月K"], horizontal=True)
+run_btn = st.sidebar.button("🔥 啟動掃描", use_container_width=True)
 
-# ==========================================
-# 3. 工具函式
-# ==========================================
-def clean_stock_code(stock_text: str) -> str:
-    return "".join(filter(str.isdigit, str(stock_text)))
+st.sidebar.markdown("---")
+st.sidebar.caption("穩定版先不做分點買賣超；分點資料通常需要另外資料源。")
 
 
+# ============================================================
+# 通用工具
+# ============================================================
+def clean_stock_code(text: str) -> str:
+    return "".join(filter(str.isdigit, str(text)))
+
+
+def fmt_num(x, decimals=0):
+    try:
+        if pd.isna(x):
+            return "-"
+        return f"{float(x):,.{decimals}f}"
+    except Exception:
+        return "-"
+
+
+def fmt_pct(x, decimals=2):
+    try:
+        if pd.isna(x):
+            return "-"
+        return f"{float(x):,.{decimals}f}%"
+    except Exception:
+        return "-"
+
+
+def get_first_existing_col(df, candidates):
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
+
+
+def normalize_date_col(df):
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.copy()
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    elif "Date" in df.columns:
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    elif "日期" in df.columns:
+        df["date"] = pd.to_datetime(df["日期"], errors="coerce")
+    return df
+
+
+def safe_to_numeric(df, cols):
+    df = df.copy()
+    for c in cols:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
+
+# ============================================================
+# Yahoo Finance：上市 / 上櫃自動判斷
+# ============================================================
 @st.cache_data(ttl=1800)
-def fetch_yfinance_tw_stock(stock_code: str, start, end):
-    """
-    自動判斷上市 .TW 或上櫃 .TWO。
-    先抓 .TW，若無資料再抓 .TWO。
-    """
+def fetch_yfinance_price(stock_code: str, start_date, end_date):
     stock_code = clean_stock_code(stock_code)
-
     if not stock_code:
         return pd.DataFrame(), ""
 
-    # yfinance 的 end 通常是 exclusive，這裡多加一天，避免選今天卻抓不到今天以前資料。
-    yf_end = end + datetime.timedelta(days=1)
-
+    yf_end = end_date + datetime.timedelta(days=1)
     candidates = [f"{stock_code}.TW", f"{stock_code}.TWO"]
 
-    for symbol in candidates:
+    for ticker in candidates:
         try:
             df = yf.download(
-                symbol,
-                start=start,
+                ticker,
+                start=start_date,
                 end=yf_end,
                 interval="1d",
                 progress=False,
                 auto_adjust=False
             )
-
             if df is not None and not df.empty:
                 df = df.reset_index()
 
-                # yfinance 某些版本會回傳 MultiIndex 欄位，這裡統一壓平。
                 if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = [str(col[0]).strip() for col in df.columns]
+                    df.columns = [str(c[0]).strip() for c in df.columns]
                 else:
-                    df.columns = [str(col).strip() for col in df.columns]
+                    df.columns = [str(c).strip() for c in df.columns]
 
                 if "Date" not in df.columns:
                     df.rename(columns={df.columns[0]: "Date"}, inplace=True)
 
-                return df, symbol
-
+                df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+                df = df.dropna(subset=["Date"])
+                df = safe_to_numeric(df, ["Open", "High", "Low", "Close", "Adj Close", "Volume"])
+                return df, ticker
         except Exception:
-            continue
+            pass
 
     return pd.DataFrame(), ""
 
 
-@st.cache_data(ttl=1800)
-def fetch_finmind_dataset(dataset_name, stock_code, start_str, end_str, token):
+def resample_ohlcv(df, mode):
+    df = df.copy()
+
+    if mode == "日K":
+        out = df.copy()
+    else:
+        df = df.set_index("Date").sort_index()
+        rule = "W-FRI" if mode == "週K" else "ME"
+        agg = {
+            "Open": "first",
+            "High": "max",
+            "Low": "min",
+            "Close": "last",
+            "Volume": "sum"
+        }
+        if "Adj Close" in df.columns:
+            agg["Adj Close"] = "last"
+
+        out = df.resample(rule).agg(agg).dropna(subset=["Open", "High", "Low", "Close"]).reset_index()
+
+    for ma in [5, 10, 20, 60, 120, 240]:
+        out[f"MA{ma}"] = out["Close"].rolling(ma).mean()
+
+    return out
+
+
+def compute_price_summary(df_daily):
+    df = df_daily.copy().sort_values("Date").dropna(subset=["Close"])
+    if df.empty:
+        return {}
+
+    latest = df.iloc[-1]
+    prev_close = None
+
+    if len(df) >= 2:
+        prev_close = float(df.iloc[-2]["Close"])
+
+    close = float(latest["Close"])
+    change = close - prev_close if prev_close is not None else np.nan
+    change_pct = (change / prev_close * 100) if prev_close not in [None, 0] else np.nan
+
+    return {
+        "date": latest["Date"],
+        "open": float(latest.get("Open", np.nan)),
+        "high": float(latest.get("High", np.nan)),
+        "low": float(latest.get("Low", np.nan)),
+        "close": close,
+        "volume": float(latest.get("Volume", np.nan)),
+        "prev_close": prev_close,
+        "change": change,
+        "change_pct": change_pct
+    }
+
+
+# ============================================================
+# FinMind 資料
+# ============================================================
+def finmind_dataloader_login(token):
     try:
         from FinMind.data import DataLoader
+        dl = DataLoader()
+        if token:
+            try:
+                dl.login_by_token(token)
+            except Exception:
+                pass
+        return dl
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=1800)
+def fetch_finmind_institutional(stock_code, start_str, end_str, token):
+    dl = finmind_dataloader_login(token)
+    if dl is None:
+        return pd.DataFrame()
+    try:
+        df = dl.taiwan_stock_institutional_investors(
+            stock_id=stock_code,
+            start_date=start_str,
+            end_date=end_str
+        )
+        return normalize_date_col(df)
     except Exception:
         return pd.DataFrame()
 
-    dl = DataLoader()
 
+@st.cache_data(ttl=1800)
+def fetch_finmind_margin(stock_code, start_str, end_str, token):
+    dl = finmind_dataloader_login(token)
+    if dl is None:
+        return pd.DataFrame()
+    try:
+        df = dl.taiwan_stock_margin_purchase_short_sale(
+            stock_id=stock_code,
+            start_date=start_str,
+            end_date=end_str
+        )
+        return normalize_date_col(df)
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=1800)
+def fetch_finmind_shareholding(stock_code, start_str, end_str, token):
+    dl = finmind_dataloader_login(token)
+    if dl is None:
+        return pd.DataFrame()
+    try:
+        df = dl.taiwan_stock_holding_shares_per(
+            stock_id=stock_code,
+            start_date=start_str,
+            end_date=end_str
+        )
+        return normalize_date_col(df)
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=1800)
+def fetch_finmind_basic_info(stock_code, token):
+    params = {
+        "dataset": "TaiwanStockInfo",
+        "data_id": stock_code
+    }
     if token:
-        try:
-            dl.login_by_token(token)
-        except Exception:
-            pass
+        params["token"] = token
 
     try:
-        if dataset_name == "institutional":
-            return dl.taiwan_stock_institutional_investors(
-                stock_id=stock_code,
-                start_date=start_str,
-                end_date=end_str
-            )
-
-        if dataset_name == "shareholding":
-            return dl.taiwan_stock_holding_shares_per(
-                stock_id=stock_code,
-                start_date=start_str,
-                end_date=end_str
-            )
-
-        if dataset_name == "margin":
-            return dl.taiwan_stock_margin_purchase_short_sale(
-                stock_id=stock_code,
-                start_date=start_str,
-                end_date=end_str
-            )
-
+        r = requests.get("https://api.finmindtrade.com/api/v4/data", params=params, timeout=10)
+        js = r.json()
+        data = js.get("data", [])
+        df = pd.DataFrame(data)
+        if df.empty:
+            return {}
+        return df.iloc[0].to_dict()
     except Exception:
-        return pd.DataFrame()
+        return {}
+
+
+@st.cache_data(ttl=1800)
+def fetch_finmind_securities_lending(stock_code, start_str, end_str, token):
+    """
+    借券賣出餘額。
+    FinMind 資料集或 DataLoader 方法名稱可能因版本不同而不同，
+    所以這裡用多重候選抓法，抓不到時畫面會顯示提示，不會中斷。
+    """
+    dl = finmind_dataloader_login(token)
+
+    if dl is not None:
+        method_candidates = [
+            "taiwan_stock_securities_lending",
+            "taiwan_stock_securities_lending_sbl",
+            "taiwan_stock_borrow_sell",
+        ]
+
+        for method_name in method_candidates:
+            try:
+                if hasattr(dl, method_name):
+                    func = getattr(dl, method_name)
+                    df = func(stock_id=stock_code, start_date=start_str, end_date=end_str)
+                    if df is not None and not df.empty:
+                        return normalize_date_col(df)
+            except Exception:
+                pass
+
+    dataset_candidates = [
+        "TaiwanStockSecuritiesLending",
+        "TaiwanStockSecuritiesLendingSBL",
+        "TaiwanStockBorrowSell",
+        "TaiwanStockTotalSecuritiesLending",
+    ]
+
+    for dataset in dataset_candidates:
+        try:
+            params = {
+                "dataset": dataset,
+                "data_id": stock_code,
+                "start_date": start_str,
+                "end_date": end_str
+            }
+            if token:
+                params["token"] = token
+
+            r = requests.get("https://api.finmindtrade.com/api/v4/data", params=params, timeout=12)
+            js = r.json()
+            data = js.get("data", [])
+            df = pd.DataFrame(data)
+
+            if not df.empty:
+                df["source_dataset"] = dataset
+                return normalize_date_col(df)
+        except Exception:
+            pass
 
     return pd.DataFrame()
 
 
+# ============================================================
+# 官方 OpenAPI：基本資料 / 注意處置
+# ============================================================
+@st.cache_data(ttl=3600)
+def fetch_twse_tpex_basic_info(stock_code):
+    result = {
+        "stock_id": stock_code,
+        "stock_name": "",
+        "market": "",
+        "industry": "",
+        "capital": "",
+        "listing_date": "",
+        "source": ""
+    }
+
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    api_list = [
+        ("TWSE公司基本資料", "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"),
+        ("TPEX公司基本資料", "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_company_info"),
+    ]
+
+    def pick(item, keys):
+        for k in keys:
+            if k in item and str(item.get(k)).strip():
+                return str(item.get(k)).strip()
+        return ""
+
+    for source, url in api_list:
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code != 200:
+                continue
+
+            data = r.json()
+            if not isinstance(data, list):
+                continue
+
+            for item in data:
+                code = pick(item, ["Code", "SecuritiesCompanyCode", "公司代號", "股票代號", "有價證券代號"])
+
+                if code == stock_code:
+                    result["stock_name"] = pick(item, ["Name", "公司名稱", "簡稱", "有價證券名稱", "SecuritiesCompanyName"])
+                    result["market"] = "上市" if "TWSE" in source else "上櫃"
+                    result["industry"] = pick(item, ["產業別", "Industry", "產業名稱"])
+                    result["capital"] = pick(item, ["實收資本額", "實收資本額(元)", "Capital", "股本"])
+                    result["listing_date"] = pick(item, ["上市日期", "上櫃日期", "掛牌日期", "ListingDate"])
+                    result["source"] = source
+                    return result
+        except Exception:
+            pass
+
+    return result
+
+
 @st.cache_data(ttl=1800)
 def check_official_warning_status(stock_code):
-    """
-    查詢證交所與櫃買中心 OpenAPI 的注意/處置股狀態。
-    欄位名稱可能因官方 API 異動而變化，所以用多欄位 fallback。
-    """
     status = {
         "is_attention": False,
         "is_disposition": False,
@@ -188,102 +435,68 @@ def check_official_warning_status(stock_code):
     headers = {"User-Agent": "Mozilla/5.0"}
 
     urls = {
-        "twse_disp": "https://openapi.twse.com.tw/v1/exchangeReport/TWT84U",
-        "twse_attn": "https://openapi.twse.com.tw/v1/exchangeReport/TWTB4U",
-        "tpex_disp": "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_disposition_securities",
-        "tpex_attn": "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_attention_securities",
+        "證交所處置": "https://openapi.twse.com.tw/v1/exchangeReport/TWT84U",
+        "證交所注意": "https://openapi.twse.com.tw/v1/exchangeReport/TWTB4U",
+        "櫃買處置": "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_disposition_securities",
+        "櫃買注意": "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_attention_securities",
     }
 
-    def safe_json(url):
-        try:
-            r = requests.get(url, headers=headers, timeout=8)
-            if r.status_code == 200:
-                return r.json()
-        except Exception:
-            return []
-        return []
-
     def get_code(item):
-        for key in [
-            "Code",
-            "SecuritiesCompanyCode",
-            "SecuritiesCode",
-            "股票代號",
-            "有價證券代號",
-            "代號"
-        ]:
+        for key in ["Code", "SecuritiesCompanyCode", "SecuritiesCode", "股票代號", "有價證券代號", "代號"]:
             if key in item:
                 return str(item.get(key)).strip()
         return ""
 
-    try:
-        twse_disp = safe_json(urls["twse_disp"])
-        twse_attn = safe_json(urls["twse_attn"])
-        tpex_disp = safe_json(urls["tpex_disp"])
-        tpex_attn = safe_json(urls["tpex_attn"])
+    for label, url in urls.items():
+        try:
+            r = requests.get(url, headers=headers, timeout=8)
+            if r.status_code != 200:
+                continue
 
-        for item in twse_disp:
-            if get_code(item) == str(stock_code):
-                status["is_disposition"] = True
-                status["source"].append("證交所處置")
-                status["details"] = (
-                    item.get("Disposition_Condition")
-                    or item.get("處置條件")
-                    or item.get("DispositionMeasures")
-                    or "詳見官方公告"
-                )
+            data = r.json()
+            if not isinstance(data, list):
+                continue
 
-        for item in twse_attn:
-            if get_code(item) == str(stock_code):
-                status["is_attention"] = True
-                status["source"].append("證交所注意")
+            for item in data:
+                if get_code(item) == stock_code:
+                    status["source"].append(label)
 
-        for item in tpex_disp:
-            if get_code(item) == str(stock_code):
-                status["is_disposition"] = True
-                status["source"].append("櫃買中心處置")
-                status["details"] = (
-                    item.get("DispositionMeasures")
-                    or item.get("處置條件")
-                    or item.get("Disposition_Condition")
-                    or "詳見官方公告"
-                )
-
-        for item in tpex_attn:
-            if get_code(item) == str(stock_code):
-                status["is_attention"] = True
-                status["source"].append("櫃買中心注意")
-
-    except Exception:
-        status["details"] = "無法連線至官方 API"
+                    if "處置" in label:
+                        status["is_disposition"] = True
+                        status["details"] = (
+                            item.get("Disposition_Condition")
+                            or item.get("DispositionMeasures")
+                            or item.get("處置條件")
+                            or "詳見官方公告"
+                        )
+                    elif "注意" in label:
+                        status["is_attention"] = True
+        except Exception:
+            pass
 
     return status
 
 
-def draw_price_volume_chart(df_k, stock_yahoo):
-    """
-    K 線 + 成交量 + MA5/MA20
-    """
-    df = df_k.copy()
-    df["MA5"] = df["Close"].rolling(window=5).mean()
-    df["MA20"] = df["Close"].rolling(window=20).mean()
-
+# ============================================================
+# 圖表函式
+# ============================================================
+def draw_kline_chart(df_k, ticker, k_period):
     fig = make_subplots(
         rows=2,
         cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.05,
+        vertical_spacing=0.04,
         row_heights=[0.72, 0.28]
     )
 
     fig.add_trace(
         go.Candlestick(
-            x=df["Date"],
-            open=df["Open"],
-            high=df["High"],
-            low=df["Low"],
-            close=df["Close"],
-            name="日 K 線",
+            x=df_k["Date"],
+            open=df_k["Open"],
+            high=df_k["High"],
+            low=df_k["Low"],
+            close=df_k["Close"],
+            name="K線",
             increasing_line_color="#FF3333",
             decreasing_line_color="#00AA00"
         ),
@@ -291,37 +504,37 @@ def draw_price_volume_chart(df_k, stock_yahoo):
         col=1
     )
 
-    fig.add_trace(
-        go.Scatter(
-            x=df["Date"],
-            y=df["MA5"],
-            name="MA5",
-            line=dict(color="#FFD700", width=1.5)
-        ),
-        row=1,
-        col=1
-    )
+    ma_settings = [
+        ("MA5", "#4C78FF"),
+        ("MA10", "#58C9A5"),
+        ("MA20", "#F2B134"),
+        ("MA60", "#FF9EDB"),
+        ("MA120", "#9B4DFF"),
+        ("MA240", "#DDDDDD"),
+    ]
 
-    fig.add_trace(
-        go.Scatter(
-            x=df["Date"],
-            y=df["MA20"],
-            name="MA20",
-            line=dict(color="#00BFFF", width=1.5)
-        ),
-        row=1,
-        col=1
-    )
+    for ma, color in ma_settings:
+        if ma in df_k.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=df_k["Date"],
+                    y=df_k[ma],
+                    name=ma,
+                    line=dict(width=1.2, color=color)
+                ),
+                row=1,
+                col=1
+            )
 
     volume_colors = [
         "#FF3333" if close_price >= open_price else "#00AA00"
-        for close_price, open_price in zip(df["Close"], df["Open"])
+        for close_price, open_price in zip(df_k["Close"], df_k["Open"])
     ]
 
     fig.add_trace(
         go.Bar(
-            x=df["Date"],
-            y=df["Volume"],
+            x=df_k["Date"],
+            y=df_k["Volume"],
             name="成交量",
             marker_color=volume_colors
         ),
@@ -330,10 +543,10 @@ def draw_price_volume_chart(df_k, stock_yahoo):
     )
 
     fig.update_layout(
-        title=f"<b>{stock_yahoo} K 線與成交量</b>",
+        title=f"{ticker} {k_period} K線與成交量",
         template="plotly_dark",
-        height=650,
-        margin=dict(l=20, r=20, t=55, b=20),
+        height=700,
+        margin=dict(l=20, r=20, t=60, b=20),
         xaxis_rangeslider_visible=False,
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
@@ -345,62 +558,83 @@ def draw_price_volume_chart(df_k, stock_yahoo):
     return fig
 
 
-def summarize_inst_by_name(df_inst_chart, pattern):
-    sub = df_inst_chart[df_inst_chart["name"].str.contains(pattern, case=False, na=False, regex=True)]
+def make_institutional_summary(df_inst):
+    if df_inst is None or df_inst.empty:
+        return pd.DataFrame(), pd.DataFrame()
 
-    if sub.empty:
-        return pd.DataFrame(columns=["date", "Net_Shares"])
+    required = {"date", "name", "buy", "sell"}
+    if not required.issubset(df_inst.columns):
+        return pd.DataFrame(), pd.DataFrame()
 
-    return sub.groupby("date", as_index=False)["Net_Shares"].sum().sort_values("date")
+    df = df_inst.copy()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["name"] = df["name"].astype(str)
+    df["buy"] = pd.to_numeric(df["buy"], errors="coerce").fillna(0)
+    df["sell"] = pd.to_numeric(df["sell"], errors="coerce").fillna(0)
+    df["Net_Shares"] = (df["buy"] - df["sell"]) / 1000
+
+    def summarize(pattern, label):
+        sub = df[df["name"].str.contains(pattern, case=False, na=False, regex=True)]
+        if sub.empty:
+            return pd.DataFrame(columns=["date", label])
+        out = sub.groupby("date", as_index=False)["Net_Shares"].sum()
+        out = out.rename(columns={"Net_Shares": label})
+        return out
+
+    foreign = summarize("外資|Foreign", "外資")
+    trust = summarize("投信|Investment Trust", "投信")
+    dealer = summarize("自營商|Dealer", "自營商")
+
+    merged = None
+    for x in [foreign, trust, dealer]:
+        merged = x if merged is None else pd.merge(merged, x, on="date", how="outer")
+
+    if merged is None or merged.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    merged = merged.sort_values("date").fillna(0)
+    for c in ["外資", "投信", "自營商"]:
+        if c not in merged.columns:
+            merged[c] = 0
+
+    merged["三大法人"] = merged["外資"] + merged["投信"] + merged["自營商"]
+
+    latest_rows = merged.sort_values("date", ascending=False).head(10).copy()
+    latest_rows["日期"] = latest_rows["date"].dt.strftime("%m/%d")
+    latest_rows = latest_rows[["日期", "外資", "投信", "自營商", "三大法人"]]
+
+    return merged, latest_rows
 
 
-def draw_institutional_margin_chart(df_inst, df_margin):
-    """
-    三大法人淨買賣超 + 融券餘額
-    修正原本 df_foreign = df_inst[df_inst 的未完成語法。
-    """
-    df_inst_chart = df_inst.copy()
-    df_inst_chart["date"] = pd.to_datetime(df_inst_chart["date"])
-    df_inst_chart["name"] = df_inst_chart["name"].astype(str)
-
-    if "Net_Shares" not in df_inst_chart.columns:
-        df_inst_chart["Net_Shares"] = (df_inst_chart["buy"] - df_inst_chart["sell"]) / 1000
-
-    df_foreign = summarize_inst_by_name(df_inst_chart, "外資|Foreign")
-    df_trust = summarize_inst_by_name(df_inst_chart, "投信|Investment Trust")
-    df_dealer = summarize_inst_by_name(df_inst_chart, "自營商|Dealer")
-
+def draw_institutional_chart(df_inst_summary, df_price_daily):
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-    if not df_foreign.empty:
-        fig.add_trace(
-            go.Bar(x=df_foreign["date"], y=df_foreign["Net_Shares"], name="外資淨買賣超"),
-            secondary_y=False
-        )
+    if df_inst_summary is None or df_inst_summary.empty:
+        return fig
 
-    if not df_trust.empty:
-        fig.add_trace(
-            go.Bar(x=df_trust["date"], y=df_trust["Net_Shares"], name="投信淨買賣超"),
-            secondary_y=False
-        )
+    colors = ["#FF3333" if x >= 0 else "#00AA00" for x in df_inst_summary["三大法人"]]
 
-    if not df_dealer.empty:
-        fig.add_trace(
-            go.Bar(x=df_dealer["date"], y=df_dealer["Net_Shares"], name="自營商淨買賣超"),
-            secondary_y=False
-        )
+    fig.add_trace(
+        go.Bar(
+            x=df_inst_summary["date"],
+            y=df_inst_summary["三大法人"],
+            name="三大法人買賣超",
+            marker_color=colors
+        ),
+        secondary_y=False
+    )
 
-    if df_margin is not None and not df_margin.empty and "ShortSaleTodayBalance" in df_margin.columns:
-        df_short = df_margin.copy()
-        df_short["date"] = pd.to_datetime(df_short["date"])
-        df_short = df_short.sort_values("date")
+    if df_price_daily is not None and not df_price_daily.empty:
+        df_p = df_price_daily[["Date", "Close"]].copy()
+        df_p["Date"] = pd.to_datetime(df_p["Date"], errors="coerce")
 
         fig.add_trace(
             go.Scatter(
-                x=df_short["date"],
-                y=df_short["ShortSaleTodayBalance"],
-                mode="lines+markers",
-                name="融券餘額"
+                x=df_p["Date"],
+                y=df_p["Close"],
+                name="股價",
+                mode="lines",
+                line=dict(color="#DDDDDD", width=1.5)
             ),
             secondary_y=True
         )
@@ -408,241 +642,463 @@ def draw_institutional_margin_chart(df_inst, df_margin):
     fig.update_layout(
         template="plotly_dark",
         height=430,
-        margin=dict(l=10, r=10, t=30, b=10),
+        margin=dict(l=10, r=10, t=40, b=20),
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        legend=dict(orientation="h", y=1.02)
     )
-
-    fig.update_yaxes(title_text="法人淨買賣超（張）", secondary_y=False)
-    fig.update_yaxes(title_text="融券餘額", secondary_y=True)
+    fig.update_yaxes(title_text="買賣超（張）", secondary_y=False)
+    fig.update_yaxes(title_text="股價", secondary_y=True)
 
     return fig
 
 
-# ==========================================
-# 4. 主畫面執行邏輯
-# ==========================================
-if not run_scan:
-    st.info("請在左側輸入股票代號與日期範圍，然後按下「啟動雷達掃描」。")
+def draw_margin_chart(df_margin, df_price_daily):
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    if df_margin is None or df_margin.empty:
+        return fig
+
+    df = df_margin.copy()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df = df.sort_values("date")
+
+    if "MarginPurchaseTodayBalance" in df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df["date"],
+                y=pd.to_numeric(df["MarginPurchaseTodayBalance"], errors="coerce"),
+                name="融資餘額",
+                mode="lines+markers"
+            ),
+            secondary_y=False
+        )
+
+    if "ShortSaleTodayBalance" in df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df["date"],
+                y=pd.to_numeric(df["ShortSaleTodayBalance"], errors="coerce"),
+                name="融券餘額",
+                mode="lines+markers"
+            ),
+            secondary_y=False
+        )
+
+    if df_price_daily is not None and not df_price_daily.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=df_price_daily["Date"],
+                y=df_price_daily["Close"],
+                name="股價",
+                mode="lines",
+                line=dict(color="#DDDDDD", width=1.3)
+            ),
+            secondary_y=True
+        )
+
+    fig.update_layout(
+        template="plotly_dark",
+        height=430,
+        margin=dict(l=10, r=10, t=40, b=20),
+        hovermode="x unified",
+        legend=dict(orientation="h", y=1.02)
+    )
+
+    fig.update_yaxes(title_text="資券餘額", secondary_y=False)
+    fig.update_yaxes(title_text="股價", secondary_y=True)
+
+    return fig
+
+
+def standardize_lending_df(df_lending):
+    if df_lending is None or df_lending.empty:
+        return pd.DataFrame()
+
+    df = df_lending.copy()
+
+    if "date" not in df.columns:
+        return pd.DataFrame()
+
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+
+    balance_col = get_first_existing_col(df, [
+        "SBLShortSaleBalance",
+        "SecuritiesLendingSalesBalance",
+        "ShortSaleBalance",
+        "SecuritiesLendingBalance",
+        "BorrowingBalance",
+        "borrow_sell_balance",
+        "借券賣出餘額"
+    ])
+
+    sell_col = get_first_existing_col(df, [
+        "SBLShortSaleTodayVolume",
+        "SecuritiesLendingSales",
+        "ShortSaleTodayVolume",
+        "BorrowingSell",
+        "borrow_sell",
+        "借券賣出"
+    ])
+
+    out = pd.DataFrame()
+    out["date"] = df["date"]
+
+    if balance_col:
+        out["借券賣出餘額"] = pd.to_numeric(df[balance_col], errors="coerce")
+    elif sell_col:
+        out["借券賣出餘額"] = pd.to_numeric(df[sell_col], errors="coerce").cumsum()
+    else:
+        return pd.DataFrame()
+
+    out = out.sort_values("date")
+    out["借券賣出今日異動"] = out["借券賣出餘額"].diff()
+
+    return out
+
+
+def draw_lending_chart(df_lending_std, df_price_daily):
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    if df_lending_std is None or df_lending_std.empty:
+        return fig
+
+    fig.add_trace(
+        go.Bar(
+            x=df_lending_std["date"],
+            y=df_lending_std["借券賣出餘額"],
+            name="借券賣出餘額",
+            marker_color="#8FD3E8"
+        ),
+        secondary_y=False
+    )
+
+    if df_price_daily is not None and not df_price_daily.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=df_price_daily["Date"],
+                y=df_price_daily["Close"],
+                name="股價",
+                mode="lines",
+                line=dict(color="#DDDDDD", width=1.3)
+            ),
+            secondary_y=True
+        )
+
+    fig.update_layout(
+        template="plotly_dark",
+        height=430,
+        margin=dict(l=10, r=10, t=40, b=20),
+        hovermode="x unified",
+        legend=dict(orientation="h", y=1.02)
+    )
+
+    fig.update_yaxes(title_text="借券賣出餘額", secondary_y=False)
+    fig.update_yaxes(title_text="股價", secondary_y=True)
+
+    return fig
+
+
+# ============================================================
+# 主流程
+# ============================================================
+if not run_btn:
+    st.info("請輸入股票代號後，按左側「啟動掃描」。")
     st.stop()
 
-clean_stock_id = clean_stock_code(stock_input)
+stock_code = clean_stock_code(stock_input)
 
-if not clean_stock_id:
-    st.warning("⚠️ 請先輸入有效的台股 4 碼股票代號。")
+if not stock_code:
+    st.error("請輸入有效股票代號。")
     st.stop()
 
 if start_date >= end_date:
-    st.warning("⚠️ 起始日期必須早於結束日期。")
+    st.error("起始日必須早於結束日。")
     st.stop()
-
-# ==========================================
-# 5. 區塊 1：K 線與成交量
-# ==========================================
-st.subheader("📈 區塊 1：K 線與成交量")
-
-with st.spinner("載入 Yahoo Finance 歷史股價資料..."):
-    df_price, final_ticker = fetch_yfinance_tw_stock(clean_stock_id, start_date, end_date)
-
-if df_price.empty:
-    st.error(f"❌ 查無股票代號 [{clean_stock_id}] 的 Yahoo Finance 歷史資料。請確認是否為上市櫃正常股票。")
-    st.stop()
-
-st.success(f"✅ 成功載入 {final_ticker} 歷史價格資料。")
-
-fig_price = draw_price_volume_chart(df_price, final_ticker)
-st.plotly_chart(fig_price, use_container_width=True)
-
-latest_close = df_price["Close"].dropna().iloc[-1]
-latest_volume = df_price["Volume"].dropna().iloc[-1]
-latest_date = pd.to_datetime(df_price["Date"].iloc[-1]).date()
-
-m1, m2, m3 = st.columns(3)
-m1.metric("最新資料日", str(latest_date))
-m2.metric("最新收盤價", f"{latest_close:,.2f}")
-m3.metric("最新成交量", f"{latest_volume:,.0f}")
-
-# ==========================================
-# 6. FinMind 籌碼資料
-# ==========================================
-st.markdown("---")
-st.markdown("## 🔍 核心雷達：股權分布、法人、資券與官方狀態")
 
 start_str = start_date.strftime("%Y-%m-%d")
 end_str = end_date.strftime("%Y-%m-%d")
 
-df_share = pd.DataFrame()
-df_margin = pd.DataFrame()
+with st.spinner("讀取 Yahoo Finance K 線資料..."):
+    df_price_daily, final_ticker = fetch_yfinance_price(stock_code, start_date, end_date)
+
+if df_price_daily.empty:
+    st.error(f"查無 {stock_code} 的 Yahoo Finance 價格資料。")
+    st.stop()
+
+with st.spinner("讀取基本資料與官方注意/處置狀態..."):
+    basic_official = fetch_twse_tpex_basic_info(stock_code)
+    basic_finmind = fetch_finmind_basic_info(stock_code, finmind_token)
+    warning_status = check_official_warning_status(stock_code)
+
 df_inst = pd.DataFrame()
+df_margin = pd.DataFrame()
+df_share = pd.DataFrame()
+df_lending_raw = pd.DataFrame()
 
-if not finmind_token:
-    st.info("💡 尚未輸入 FinMind Token，因此只顯示 K 線、成交量與官方注意/處置查詢。")
+if finmind_token:
+    with st.spinner("讀取 FinMind 法人、資券、股權與借券資料..."):
+        df_inst = fetch_finmind_institutional(stock_code, start_str, end_str, finmind_token)
+        df_margin = fetch_finmind_margin(stock_code, start_str, end_str, finmind_token)
+        df_share = fetch_finmind_shareholding(stock_code, start_str, end_str, finmind_token)
+        df_lending_raw = fetch_finmind_securities_lending(stock_code, start_str, end_str, finmind_token)
 else:
-    with st.spinner("載入 FinMind 籌碼資料..."):
-        df_share = fetch_finmind_dataset("shareholding", clean_stock_id, start_str, end_str, finmind_token)
-        df_margin = fetch_finmind_dataset("margin", clean_stock_id, start_str, end_str, finmind_token)
-        df_inst = fetch_finmind_dataset("institutional", clean_stock_id, start_str, end_str, finmind_token)
+    st.warning("尚未輸入 FinMind Token，因此法人、資券、借券、股權資料可能不會顯示。")
 
-col_info1, col_info2, col_info3 = st.columns(3)
+df_k = resample_ohlcv(df_price_daily, k_period)
+price_summary = compute_price_summary(df_price_daily)
 
-with col_info1:
-    st.markdown("### 📅 股東會與重要日程")
-    st.metric(label="預估常見股東會/除權息區間", value="6 月 ~ 7 月")
-    st.caption("此為一般台股常見區間提示，實際日期仍須查公司公告。")
+# ============================================================
+# 股票摘要
+# ============================================================
+stock_name = (
+    basic_official.get("stock_name")
+    or basic_finmind.get("stock_name")
+    or basic_finmind.get("stock_name_en")
+    or ""
+)
 
-with col_info2:
-    st.markdown("### 🌊 流通籌碼與浮額診斷")
+market = (
+    basic_official.get("market")
+    or basic_finmind.get("type")
+    or ""
+)
 
-    if not df_share.empty and {"date", "HoldingSharesPer", "percent"}.issubset(df_share.columns):
-        latest_share_date = df_share["date"].max()
-        df_s_latest = df_share[df_share["date"] == latest_share_date]
+industry = (
+    basic_official.get("industry")
+    or basic_finmind.get("industry_category")
+    or basic_finmind.get("industry")
+    or ""
+)
 
-        big_pct = df_s_latest[df_s_latest["HoldingSharesPer"] >= 1000]["percent"].sum()
+capital_raw = (
+    basic_official.get("capital")
+    or basic_finmind.get("capital")
+    or basic_finmind.get("paid_in_capital")
+    or ""
+)
+
+st.markdown("## 🧾 股票摘要")
+
+title_left, title_right = st.columns([2.2, 1])
+
+with title_left:
+    st.markdown(f"### {stock_code} {stock_name} `{final_ticker}`")
+    tag_text = []
+    if market:
+        tag_text.append(str(market))
+    if industry:
+        tag_text.append(str(industry))
+    if tag_text:
+        st.caption("・".join(tag_text))
+
+with title_right:
+    if warning_status["is_disposition"]:
+        st.error("🛑 官方處置股")
+        if warning_status["details"]:
+            st.caption(warning_status["details"])
+    elif warning_status["is_attention"]:
+        st.warning("⚠️ 官方注意股")
+    else:
+        st.success("✅ 未列注意/處置")
+
+m1, m2, m3, m4, m5, m6 = st.columns(6)
+m1.metric("收盤價", fmt_num(price_summary.get("close"), 2))
+m2.metric("漲跌", fmt_num(price_summary.get("change"), 2), delta=fmt_num(price_summary.get("change"), 2))
+m3.metric("漲跌幅", fmt_pct(price_summary.get("change_pct"), 2))
+m4.metric("成交量", fmt_num(price_summary.get("volume"), 0))
+m5.metric("股本", capital_raw if capital_raw else "-")
+m6.metric("資料日", str(pd.to_datetime(price_summary.get("date")).date()))
+
+ohlc_text = (
+    f"開 {fmt_num(price_summary.get('open'), 2)}　"
+    f"高 {fmt_num(price_summary.get('high'), 2)}　"
+    f"低 {fmt_num(price_summary.get('low'), 2)}　"
+    f"收 {fmt_num(price_summary.get('close'), 2)}"
+)
+st.caption(ohlc_text)
+
+# ============================================================
+# K線
+# ============================================================
+st.markdown("---")
+st.markdown("## 📈 K線圖與成交量")
+
+fig_k = draw_kline_chart(df_k, final_ticker, k_period)
+st.plotly_chart(fig_k, use_container_width=True)
+
+latest_k = df_k.dropna(subset=["Close"]).iloc[-1]
+ma_cols_show = [c for c in ["MA5", "MA10", "MA20", "MA60", "MA120", "MA240"] if c in df_k.columns]
+
+ma_text_parts = []
+for c in ma_cols_show:
+    ma_text_parts.append(f"{c} {fmt_num(latest_k.get(c), 2)}")
+st.caption("　".join(ma_text_parts))
+
+# ============================================================
+# 三大法人
+# ============================================================
+st.markdown("---")
+st.markdown("## 🧑‍💼 三大法人買賣超")
+
+df_inst_summary, df_inst_latest = make_institutional_summary(df_inst)
+
+if df_inst_summary.empty:
+    st.info("無三大法人資料。請確認 FinMind Token 或資料區間。")
+else:
+    col_i1, col_i2 = st.columns([1.4, 1])
+
+    with col_i1:
+        fig_inst = draw_institutional_chart(df_inst_summary, df_price_daily)
+        st.plotly_chart(fig_inst, use_container_width=True)
+
+    with col_i2:
+        st.markdown("### 近 10 日法人買賣超（張）")
+        st.dataframe(
+            df_inst_latest.style.format({
+                "外資": "{:,.0f}",
+                "投信": "{:,.0f}",
+                "自營商": "{:,.0f}",
+                "三大法人": "{:,.0f}",
+            }),
+            use_container_width=True,
+            height=420
+        )
+
+# ============================================================
+# 融資融券
+# ============================================================
+st.markdown("---")
+st.markdown("## 💳 融資融券餘額")
+
+if df_margin.empty:
+    st.info("無融資融券資料。請確認 FinMind Token 或資料區間。")
+else:
+    fig_margin = draw_margin_chart(df_margin, df_price_daily)
+    st.plotly_chart(fig_margin, use_container_width=True)
+
+    df_m = df_margin.copy().sort_values("date", ascending=False).head(12)
+
+    cols = ["date"]
+    rename_map = {"date": "日期"}
+
+    margin_candidates = [
+        ("MarginPurchaseBuy", "融資買進"),
+        ("MarginPurchaseSell", "融資賣出"),
+        ("MarginPurchaseCashRepayment", "融資現償"),
+        ("MarginPurchaseTodayBalance", "融資餘額"),
+        ("ShortSaleBuy", "融券買進"),
+        ("ShortSaleSell", "融券賣出"),
+        ("ShortSaleCashRepayment", "融券現償"),
+        ("ShortSaleTodayBalance", "融券餘額"),
+    ]
+
+    for c, n in margin_candidates:
+        if c in df_m.columns:
+            cols.append(c)
+            rename_map[c] = n
+
+    df_m_show = df_m[cols].rename(columns=rename_map)
+    st.dataframe(df_m_show, use_container_width=True)
+
+# ============================================================
+# 借券賣出餘額
+# ============================================================
+st.markdown("---")
+st.markdown("## 🏦 借券賣出餘額")
+
+df_lending = standardize_lending_df(df_lending_raw)
+
+if df_lending.empty:
+    st.info(
+        "目前沒有成功取得借券賣出餘額。"
+        "若 FinMind 資料集名稱或權限不同，請先確認 Token 權限；之後也可改接官方借券資料。"
+    )
+
+    if df_lending_raw is not None and not df_lending_raw.empty:
+        st.markdown("### 已取得但尚未能自動辨識欄位的原始借券資料")
+        st.dataframe(df_lending_raw, use_container_width=True)
+else:
+    fig_lending = draw_lending_chart(df_lending, df_price_daily)
+    st.plotly_chart(fig_lending, use_container_width=True)
+
+    latest_lending = df_lending.sort_values("date").iloc[-1]
+    l1, l2, l3 = st.columns(3)
+    l1.metric("最新日期", str(pd.to_datetime(latest_lending["date"]).date()))
+    l2.metric("借券賣出餘額", fmt_num(latest_lending["借券賣出餘額"], 0))
+    l3.metric("今日異動", fmt_num(latest_lending["借券賣出今日異動"], 0))
+
+    st.dataframe(
+        df_lending.sort_values("date", ascending=False).head(12).rename(columns={"date": "日期"}),
+        use_container_width=True
+    )
+
+# ============================================================
+# 股權分布 / 浮額估算
+# ============================================================
+st.markdown("---")
+st.markdown("## 🌊 股權分布與浮額估算")
+
+if df_share.empty:
+    st.info("無股權分布資料。")
+else:
+    if {"date", "HoldingSharesPer", "percent"}.issubset(df_share.columns):
+        df_s = df_share.copy()
+        df_s["date"] = pd.to_datetime(df_s["date"], errors="coerce")
+        df_s["HoldingSharesPer"] = pd.to_numeric(df_s["HoldingSharesPer"], errors="coerce")
+        df_s["percent"] = pd.to_numeric(df_s["percent"], errors="coerce")
+
+        latest_share_date = df_s["date"].max()
+        df_latest_share = df_s[df_s["date"] == latest_share_date].copy()
+
+        big_pct = df_latest_share[df_latest_share["HoldingSharesPer"] >= 1000]["percent"].sum()
         float_pct = 100 - big_pct
 
-        st.metric(label="估算市場浮額比例", value=f"{float_pct:.2f} %")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("股權資料日", str(pd.to_datetime(latest_share_date).date()))
+        c2.metric("大戶持股估算", fmt_pct(big_pct, 2))
+        c3.metric("市場浮額估算", fmt_pct(float_pct, 2))
 
-        if float_pct > 60:
-            st.error("⚠️ 籌碼偏分散")
-        elif float_pct > 40:
-            st.warning("⚖️ 籌碼結構中性")
-        else:
-            st.success("💎 籌碼相對集中")
+        st.dataframe(df_latest_share, use_container_width=True)
     else:
-        st.caption("尚無股權分布資料。")
-
-with col_info3:
-    st.markdown("### 🚨 官方注意/處置狀態")
-
-    with st.spinner("查詢官方注意/處置名單..."):
-        official_status = check_official_warning_status(clean_stock_id)
-
-    if official_status["is_disposition"]:
-        st.error(f"🛑 處置股\n\n{official_status['details']}")
-        if official_status["source"]:
-            st.caption("來源：" + "、".join(official_status["source"]))
-    elif official_status["is_attention"]:
-        st.warning("⚠️ 注意股\n\n目前被官方列為注意有價證券，請留意波動風險。")
-        if official_status["source"]:
-            st.caption("來源：" + "、".join(official_status["source"]))
-    else:
-        st.success("✅ 目前未列入官方注意或處置名單。")
-
-# ==========================================
-# 7. 法人與資券明細
-# ==========================================
-if finmind_token:
-    st.markdown("---")
-    st.markdown("## 📊 籌碼數據表：法人與資券明細")
-
-    col_table1, col_table2 = st.columns([1, 1.25])
-
-    with col_table1:
-        st.markdown("### 三大法人最新交易日")
-
-        if not df_inst.empty and {"date", "name", "buy", "sell"}.issubset(df_inst.columns):
-            df_inst = df_inst.copy()
-            df_inst["Net_Shares"] = (df_inst["buy"] - df_inst["sell"]) / 1000
-
-            df_valid_inst = df_inst[(df_inst["buy"] > 0) | (df_inst["sell"] > 0)]
-            latest_inst_date = df_valid_inst["date"].max() if not df_valid_inst.empty else df_inst["date"].max()
-
-            st.markdown(f"**最新交易日：{latest_inst_date}**")
-
-            df_table = df_inst[df_inst["date"] == latest_inst_date].copy()
-            inst_summary = []
-
-            for name_key, pattern in [
-                ("外資", "外資|Foreign"),
-                ("投信", "投信|Investment Trust"),
-                ("自營商", "自營商|Dealer")
-            ]:
-                sub_df = df_table[df_table["name"].astype(str).str.contains(pattern, case=False, na=False, regex=True)]
-
-                buy_val = sub_df["buy"].sum() / 1000
-                sell_val = sub_df["sell"].sum() / 1000
-                net_val = buy_val - sell_val
-
-                inst_summary.append({
-                    "機構": name_key,
-                    "買進（張）": int(round(buy_val, 0)),
-                    "賣出（張）": int(round(sell_val, 0)),
-                    "淨買賣超（張）": int(round(net_val, 0))
-                })
-
-            st.dataframe(
-                pd.DataFrame(inst_summary).style.format({
-                    "買進（張）": "{:,}",
-                    "賣出（張）": "{:,}",
-                    "淨買賣超（張）": "{:,}"
-                }),
-                use_container_width=True
-            )
-        else:
-            st.caption("尚無法人資料。")
-
-    with col_table2:
-        st.markdown("### 近 10 日融資融券變化")
-
-        if not df_margin.empty:
-            df_m_show = df_margin.sort_values("date", ascending=False).head(10).copy()
-
-            cols_to_show = ["date"]
-            col_names = ["日期"]
-
-            if "MarginPurchaseTodayBalance" in df_m_show.columns:
-                for c, n in [
-                    ("MarginPurchaseBuy", "融資買進"),
-                    ("MarginPurchaseSell", "融資賣出"),
-                    ("MarginPurchaseTodayBalance", "融資餘額")
-                ]:
-                    if c in df_m_show.columns:
-                        cols_to_show.append(c)
-                        col_names.append(n)
-
-            if "ShortSaleTodayBalance" in df_m_show.columns:
-                for c, n in [
-                    ("ShortSaleBuy", "融券買進"),
-                    ("ShortSaleSell", "融券賣出"),
-                    ("ShortSaleTodayBalance", "融券餘額")
-                ]:
-                    if c in df_m_show.columns:
-                        cols_to_show.append(c)
-                        col_names.append(n)
-
-            df_m_show = df_m_show[cols_to_show]
-            df_m_show.columns = col_names
-
-            format_dict = {col: "{:,.0f}" for col in col_names if col != "日期"}
-            st.dataframe(df_m_show.style.format(format_dict), use_container_width=True)
-        else:
-            st.caption("尚無融資融券資料。")
-
-# ==========================================
-# 8. 區塊 4：三大法人與空方動態連動雷達
-# ==========================================
-if finmind_token and not df_inst.empty:
-    st.markdown("---")
-    st.markdown("## 📈 區塊 4：三大法人與空方動態連動雷達")
-
-    fig_inst = draw_institutional_margin_chart(df_inst, df_margin)
-    st.plotly_chart(fig_inst, use_container_width=True)
-
-    st.caption("註：法人買賣單位已由股數換算為張；融券餘額依 FinMind 原始欄位顯示。")
-
-# ==========================================
-# 9. 原始資料檢視
-# ==========================================
-with st.expander("🔎 展開查看原始資料"):
-    st.markdown("### Yahoo Finance 股價資料")
-    st.dataframe(df_price, use_container_width=True)
-
-    if finmind_token:
-        st.markdown("### FinMind 法人資料")
-        st.dataframe(df_inst, use_container_width=True)
-
-        st.markdown("### FinMind 融資融券資料")
-        st.dataframe(df_margin, use_container_width=True)
-
-        st.markdown("### FinMind 股權分布資料")
         st.dataframe(df_share, use_container_width=True)
+
+# ============================================================
+# 基本資料
+# ============================================================
+st.markdown("---")
+st.markdown("## 🏢 基本資料")
+
+basic_rows = [
+    ["股票代號", stock_code],
+    ["股票名稱", stock_name if stock_name else "-"],
+    ["Yahoo Ticker", final_ticker],
+    ["市場別", market if market else "-"],
+    ["產業別", industry if industry else "-"],
+    ["股本 / 實收資本額", capital_raw if capital_raw else "-"],
+    ["上市櫃日期", basic_official.get("listing_date") or basic_finmind.get("date") or "-"],
+    ["基本資料來源", basic_official.get("source") or "FinMind / fallback"],
+]
+
+df_basic_show = pd.DataFrame(basic_rows, columns=["項目", "內容"])
+st.dataframe(df_basic_show, use_container_width=True, hide_index=True)
+
+# ============================================================
+# 原始資料
+# ============================================================
+with st.expander("🔎 原始資料檢視"):
+    st.markdown("### Yahoo Finance 股價")
+    st.dataframe(df_price_daily, use_container_width=True)
+
+    st.markdown("### FinMind 三大法人")
+    st.dataframe(df_inst, use_container_width=True)
+
+    st.markdown("### FinMind 融資融券")
+    st.dataframe(df_margin, use_container_width=True)
+
+    st.markdown("### FinMind 借券原始資料")
+    st.dataframe(df_lending_raw, use_container_width=True)
+
+    st.markdown("### FinMind 股權分布")
+    st.dataframe(df_share, use_container_width=True)
+
+st.caption("本工具僅整理公開資料與視覺化，不構成投資建議。")
